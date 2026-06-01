@@ -3,1190 +3,1558 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MEDIASCAN — Physical Media Intelligence</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js"></script>
-<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Bebas+Neue&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<title>MusicNest — Collect Everything</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
-  :root {
-    --bg: #0a0c0f;
-    --surface: #111418;
-    --surface2: #1a1f26;
-    --border: #2a3040;
-    --accent: #00e5ff;
-    --accent2: #ff6b35;
-    --accent3: #7cff6b;
-    --text: #e8edf5;
-    --muted: #5a6478;
-    --scan-line: rgba(0, 229, 255, 0.15);
-  }
-
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: 'DM Sans', sans-serif;
-    min-height: 100vh;
-    overflow-x: hidden;
-  }
-
-  /* Scanlines overlay */
-  body::before {
-    content: '';
-    position: fixed;
-    inset: 0;
-    background: repeating-linear-gradient(
-      0deg,
-      transparent,
-      transparent 2px,
-      rgba(0,0,0,0.03) 2px,
-      rgba(0,0,0,0.03) 4px
-    );
-    pointer-events: none;
-    z-index: 9999;
-  }
-
-  /* Header */
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 1.2rem 2rem;
-    border-bottom: 1px solid var(--border);
-    background: rgba(10,12,15,0.9);
-    backdrop-filter: blur(12px);
-    position: sticky;
-    top: 0;
-    z-index: 100;
-  }
-
-  .logo {
-    font-family: 'Bebas Neue', sans-serif;
-    font-size: 1.8rem;
-    letter-spacing: 0.15em;
-    color: var(--accent);
-    text-shadow: 0 0 20px rgba(0,229,255,0.4);
-  }
-
-  .logo span { color: var(--text); }
-
-  .header-status {
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.7rem;
-    color: var(--muted);
-    text-align: right;
-    line-height: 1.6;
-  }
-
-  .status-dot {
-    display: inline-block;
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    background: var(--accent3);
-    box-shadow: 0 0 8px var(--accent3);
-    animation: pulse 2s infinite;
-    margin-right: 5px;
-  }
-
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.3; }
-  }
-
-  /* Main layout */
-  .container {
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 2rem;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 2rem;
-  }
-
-  @media (max-width: 900px) {
-    .container { grid-template-columns: 1fr; }
-  }
-
-  /* Panel */
-  .panel {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    overflow: hidden;
-    position: relative;
-  }
-
-  .panel::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 2px;
-    background: linear-gradient(90deg, var(--accent), transparent);
-  }
-
-  .panel-header {
-    padding: 1rem 1.5rem;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-  }
-
-  .panel-title {
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.75rem;
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-    color: var(--muted);
-  }
-
-  .panel-icon {
-    width: 18px; height: 18px;
-    color: var(--accent);
-  }
-
-  /* Scanner panel */
-  #scanner-panel { grid-row: span 1; }
-
-  .scanner-area {
-    position: relative;
-    background: #000;
-    aspect-ratio: 4/3;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    overflow: hidden;
-  }
-
-  #interactive {
-    width: 100%;
-    height: 100%;
-    position: relative;
-  }
-
-  #interactive video {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-
-  #interactive canvas {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-  }
-
-  .scanner-overlay {
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    z-index: 10;
-  }
-
-  .scan-frame {
-    position: absolute;
-    top: 50%; left: 50%;
-    transform: translate(-50%, -50%);
-    width: 70%; height: 40%;
-    border: 2px solid var(--accent);
-    box-shadow: 0 0 0 9999px rgba(0,0,0,0.5), 0 0 30px rgba(0,229,255,0.2) inset;
-  }
-
-  .scan-frame::before, .scan-frame::after {
-    content: '';
-    position: absolute;
-    width: 20px; height: 20px;
-  }
-
-  .scan-frame::before { top: -2px; left: -2px; border-top: 3px solid var(--accent2); border-left: 3px solid var(--accent2); }
-  .scan-frame::after { top: -2px; right: -2px; border-top: 3px solid var(--accent2); border-right: 3px solid var(--accent2); }
-
-  .corner-bl, .corner-br {
-    position: absolute;
-    width: 20px; height: 20px;
-    bottom: -2px;
-  }
-  .corner-bl { left: -2px; border-bottom: 3px solid var(--accent2); border-left: 3px solid var(--accent2); }
-  .corner-br { right: -2px; border-bottom: 3px solid var(--accent2); border-right: 3px solid var(--accent2); }
-
-  .scan-line-anim {
-    position: absolute;
-    left: 0; right: 0;
-    height: 2px;
-    background: linear-gradient(90deg, transparent, var(--accent), transparent);
-    box-shadow: 0 0 10px var(--accent);
-    animation: scanMove 2s linear infinite;
-    top: 0;
-  }
-
-  @keyframes scanMove {
-    0% { top: 5%; }
-    100% { top: 95%; }
-  }
-
-  .scanner-idle {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 1rem;
-    color: var(--muted);
-  }
-
-  .scanner-idle svg {
-    width: 60px; height: 60px;
-    opacity: 0.3;
-  }
-
-  .scanner-idle p {
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.75rem;
-    letter-spacing: 0.1em;
-  }
-
-  /* Scanner controls */
-  .scanner-controls {
-    padding: 1.2rem 1.5rem;
-    display: flex;
-    gap: 0.75rem;
-    flex-wrap: wrap;
-    border-top: 1px solid var(--border);
-    background: var(--surface2);
-  }
-
-  .btn {
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.72rem;
-    letter-spacing: 0.12em;
-    padding: 0.55rem 1.2rem;
-    border: 1px solid var(--border);
-    background: transparent;
-    color: var(--text);
-    cursor: pointer;
-    border-radius: 2px;
-    text-transform: uppercase;
-    transition: all 0.15s;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  .btn:hover { border-color: var(--accent); color: var(--accent); }
-
-  .btn-primary {
-    background: var(--accent);
-    color: #000;
-    border-color: var(--accent);
-    font-weight: 600;
-  }
-
-  .btn-primary:hover { background: #00bcd4; color: #000; border-color: #00bcd4; }
-
-  .btn-danger { border-color: #ff4444; color: #ff4444; }
-  .btn-danger:hover { background: rgba(255,68,68,0.1); }
-
-  .btn:disabled { opacity: 0.3; cursor: not-allowed; }
-
-  /* Manual input */
-  .manual-input {
-    padding: 1rem 1.5rem;
-    display: flex;
-    gap: 0.5rem;
-    border-top: 1px solid var(--border);
-  }
-
-  .barcode-input {
-    flex: 1;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    color: var(--text);
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.85rem;
-    padding: 0.5rem 0.75rem;
-    border-radius: 2px;
-    outline: none;
-    transition: border-color 0.15s;
-  }
-
-  .barcode-input:focus { border-color: var(--accent); }
-  .barcode-input::placeholder { color: var(--muted); }
-
-  /* Results panel */
-  .results-panel {
-    display: flex;
-    flex-direction: column;
-  }
-
-  .result-card {
-    padding: 1.5rem;
-    flex: 1;
-  }
-
-  .no-result {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    height: 200px;
-    color: var(--muted);
-    gap: 1rem;
-  }
-
-  .no-result p {
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.72rem;
-    letter-spacing: 0.1em;
-  }
-
-  /* Media result */
-  .media-result { display: flex; flex-direction: column; gap: 1.25rem; }
-
-  .media-header {
-    display: flex;
-    gap: 1.25rem;
-    align-items: flex-start;
-  }
-
-  .media-cover {
-    width: 90px;
-    flex-shrink: 0;
-    border-radius: 2px;
-    overflow: hidden;
-    border: 1px solid var(--border);
-    background: var(--surface2);
-    aspect-ratio: 2/3;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .media-cover img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-
-  .cover-placeholder {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 2rem;
-    opacity: 0.3;
-  }
-
-  .media-title-block { flex: 1; }
-
-  .media-type-badge {
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.62rem;
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-    padding: 0.2rem 0.5rem;
-    border-radius: 2px;
-    display: inline-block;
-    margin-bottom: 0.5rem;
-  }
-
-  .badge-movie { background: rgba(255,107,53,0.15); color: var(--accent2); border: 1px solid rgba(255,107,53,0.3); }
-  .badge-music { background: rgba(0,229,255,0.1); color: var(--accent); border: 1px solid rgba(0,229,255,0.2); }
-  .badge-book { background: rgba(124,255,107,0.1); color: var(--accent3); border: 1px solid rgba(124,255,107,0.2); }
-  .badge-game { background: rgba(180,107,255,0.1); color: #b46bff; border: 1px solid rgba(180,107,255,0.2); }
-  .badge-unknown { background: rgba(90,100,120,0.2); color: var(--muted); border: 1px solid var(--border); }
-
-  .media-title {
-    font-family: 'Bebas Neue', sans-serif;
-    font-size: 1.5rem;
-    letter-spacing: 0.05em;
-    line-height: 1.1;
-    margin-bottom: 0.3rem;
-  }
-
-  .media-subtitle {
-    font-size: 0.82rem;
-    color: var(--muted);
-    font-weight: 300;
-  }
-
-  /* Details grid */
-  .details-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.6rem;
-  }
-
-  .detail-item {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    padding: 0.6rem 0.75rem;
-    border-radius: 2px;
-  }
-
-  .detail-label {
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.6rem;
-    letter-spacing: 0.12em;
-    color: var(--muted);
-    text-transform: uppercase;
-    margin-bottom: 0.2rem;
-  }
-
-  .detail-value {
-    font-size: 0.82rem;
-    font-weight: 500;
-    color: var(--text);
-  }
-
-  .detail-item.full { grid-column: 1 / -1; }
-
-  /* Rating bar */
-  .rating-bar {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  .bar-track {
-    flex: 1;
-    height: 4px;
-    background: var(--border);
-    border-radius: 2px;
-    overflow: hidden;
-  }
-
-  .bar-fill {
-    height: 100%;
-    background: linear-gradient(90deg, var(--accent), var(--accent2));
-    border-radius: 2px;
-    transition: width 0.8s ease;
-  }
-
-  .rating-num {
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.72rem;
-    color: var(--accent);
-    min-width: 2.5rem;
-  }
-
-  /* Barcode display */
-  .barcode-display {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    padding: 0.75rem;
-    border-radius: 2px;
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.72rem;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .barcode-num {
-    color: var(--accent);
-    letter-spacing: 0.15em;
-  }
-
-  /* Loading state */
-  .loading-state {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    padding: 2rem 0;
-  }
-
-  .spinner {
-    width: 24px; height: 24px;
-    border: 2px solid var(--border);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-    flex-shrink: 0;
-  }
-
-  @keyframes spin { to { transform: rotate(360deg); } }
-
-  .loading-text {
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.75rem;
-    color: var(--muted);
-    letter-spacing: 0.1em;
-  }
-
-  /* History panel */
-  .history-panel {
-    grid-column: 1 / -1;
-  }
-
-  .history-list {
-    padding: 0;
-  }
-
-  .history-item {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    padding: 0.85rem 1.5rem;
-    border-bottom: 1px solid var(--border);
-    cursor: pointer;
-    transition: background 0.15s;
-  }
-
-  .history-item:hover { background: var(--surface2); }
-  .history-item:last-child { border-bottom: none; }
-
-  .history-type-icon {
-    font-size: 1.2rem;
-    width: 2rem;
-    text-align: center;
-  }
-
-  .history-info { flex: 1; }
-
-  .history-name {
-    font-size: 0.85rem;
-    font-weight: 500;
-    margin-bottom: 0.1rem;
-  }
-
-  .history-meta {
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.62rem;
-    color: var(--muted);
-    letter-spacing: 0.08em;
-  }
-
-  .history-barcode {
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.65rem;
-    color: var(--muted);
-  }
-
-  .history-empty {
-    padding: 2rem;
-    text-align: center;
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.72rem;
-    color: var(--muted);
-    letter-spacing: 0.1em;
-  }
-
-  /* Toast */
-  .toast {
-    position: fixed;
-    bottom: 2rem;
-    right: 2rem;
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-left: 3px solid var(--accent);
-    padding: 0.85rem 1.25rem;
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.72rem;
-    letter-spacing: 0.08em;
-    color: var(--text);
-    border-radius: 2px;
-    z-index: 9998;
-    transform: translateY(20px);
-    opacity: 0;
-    transition: all 0.25s;
-    max-width: 300px;
-  }
-
-  .toast.show { transform: translateY(0); opacity: 1; }
-  .toast.error { border-left-color: #ff4444; }
-  .toast.success { border-left-color: var(--accent3); }
-
-  /* Error state */
-  .error-state {
-    padding: 1.5rem;
-    background: rgba(255,68,68,0.05);
-    border: 1px solid rgba(255,68,68,0.2);
-    border-radius: 2px;
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.72rem;
-    color: #ff6666;
-    letter-spacing: 0.08em;
-  }
-
-  /* Animations */
-  .result-in {
-    animation: resultIn 0.3s ease forwards;
-  }
-
-  @keyframes resultIn {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-
-  /* Stats bar */
-  .stats-bar {
-    grid-column: 1 / -1;
-    display: flex;
-    gap: 1px;
-    background: var(--border);
-    border: 1px solid var(--border);
-    border-radius: 2px;
-    overflow: hidden;
-  }
-
-  .stat-cell {
-    flex: 1;
-    background: var(--surface);
-    padding: 0.85rem 1.25rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-  }
-
-  .stat-label {
-    font-family: 'Share Tech Mono', monospace;
-    font-size: 0.6rem;
-    letter-spacing: 0.12em;
-    color: var(--muted);
-    text-transform: uppercase;
-  }
-
-  .stat-value {
-    font-family: 'Bebas Neue', sans-serif;
-    font-size: 1.6rem;
-    color: var(--accent);
-    line-height: 1;
-  }
+/* ── THEME SYSTEM ─────────────────────────────────────────── */
+:root {
+  --bg:        #0e0e0f;
+  --bg2:       #161618;
+  --bg3:       #1f1f22;
+  --border:    #2a2a2e;
+  --text:      #e8e8ea;
+  --text2:     #888890;
+  --text3:     #555560;
+  --accent:    #c8a96e;
+  --accent2:   #9d7a45;
+  --danger:    #d64e4e;
+  --success:   #4eab6d;
+  --card-r:    8px;
+  --trans:     0.18s ease;
+  --font-d:    'DM Serif Display', Georgia, serif;
+  --font-m:    'DM Mono', monospace;
+  --font-s:    'DM Sans', sans-serif;
+}
+[data-theme="dawn"] {
+  --bg:#faf7f2; --bg2:#f2ede4; --bg3:#e8e1d6;
+  --border:#d8cfc2; --text:#1a1612; --text2:#6b5f50; --text3:#9e9084;
+  --accent:#9b6b2f; --accent2:#c48c3f; --danger:#b83232; --success:#3a7a4e;
+}
+[data-theme="slate"] {
+  --bg:#0d1117; --bg2:#161b22; --bg3:#21262d;
+  --border:#30363d; --text:#c9d1d9; --text2:#8b949e; --text3:#484f58;
+  --accent:#58a6ff; --accent2:#1f6feb; --danger:#f85149; --success:#3fb950;
+}
+[data-theme="forest"] {
+  --bg:#0d1410; --bg2:#131c15; --bg3:#1a261c;
+  --border:#253027; --text:#cde0cb; --text2:#7aab74; --text3:#4a6e46;
+  --accent:#6eba5e; --accent2:#4c9a3c; --danger:#d96060; --success:#4eba6e;
+}
+[data-theme="rose"] {
+  --bg:#1a0d12; --bg2:#231118; --bg3:#2e1520;
+  --border:#3d1f2a; --text:#f0d8de; --text2:#b87a8a; --text3:#7a4a56;
+  --accent:#e8748e; --accent2:#c44d68; --danger:#e85252; --success:#5eb884;
+}
+[data-theme="ink"] {
+  --bg:#f5f5f0; --bg2:#eeeee8; --bg3:#e5e5de;
+  --border:#d0d0c8; --text:#1a1a18; --text2:#585852; --text3:#909088;
+  --accent:#1a1a18; --accent2:#404040; --danger:#b83232; --success:#2d7a4a;
+}
+/* ── RESET ─────────────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{font-family:var(--font-s);background:var(--bg);color:var(--text);min-height:100vh;transition:background var(--trans),color var(--trans);font-size:15px;line-height:1.6}
+a{color:inherit;text-decoration:none}
+button{cursor:pointer;font-family:var(--font-s);border:none;background:none}
+input,select,textarea{font-family:var(--font-s);color:var(--text);background:var(--bg2)}
+img{display:block;max-width:100%}
+ul{list-style:none}
+
+/* ── UTILITY ────────────────────────────────────────────────── */
+.hidden{display:none!important}
+.flex{display:flex}
+.flex-col{display:flex;flex-direction:column}
+.gap-1{gap:6px} .gap-2{gap:12px} .gap-3{gap:20px} .gap-4{gap:28px}
+.items-center{align-items:center}
+.justify-between{justify-content:space-between}
+.text-accent{color:var(--accent)}
+.text-muted{color:var(--text2)}
+.text-sm{font-size:13px}
+.text-xs{font-size:11px}
+.mono{font-family:var(--font-m)}
+.serif{font-family:var(--font-d)}
+.fw-500{font-weight:500}
+.fw-600{font-weight:600}
+.w-full{width:100%}
+.truncate{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ── LAYOUT ─────────────────────────────────────────────────── */
+#app{display:flex;flex-direction:column;min-height:100vh}
+.page{display:none;flex:1;flex-direction:column}
+.page.active{display:flex}
+
+/* ── NAV ─────────────────────────────────────────────────────── */
+nav{position:sticky;top:0;z-index:100;background:var(--bg);border-bottom:1px solid var(--border);padding:0 24px;height:58px;display:flex;align-items:center;justify-content:space-between;transition:background var(--trans)}
+.nav-brand{font-family:var(--font-d);font-size:22px;letter-spacing:-.5px;color:var(--accent)}
+.nav-brand span{color:var(--text2);font-style:italic;font-size:14px;margin-left:6px}
+.nav-links{display:flex;align-items:center;gap:4px}
+.nav-btn{padding:6px 14px;border-radius:6px;font-size:13px;font-weight:500;color:var(--text2);transition:color var(--trans),background var(--trans)}
+.nav-btn:hover,.nav-btn.active{color:var(--text);background:var(--bg3)}
+.nav-actions{display:flex;align-items:center;gap:10px}
+.btn-icon{width:34px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--text2);background:var(--bg2);border:1px solid var(--border);transition:all var(--trans)}
+.btn-icon:hover{color:var(--text);border-color:var(--accent)}
+.btn-primary{background:var(--accent);color:#000;padding:7px 18px;border-radius:7px;font-size:13px;font-weight:600;transition:all var(--trans)}
+.btn-primary:hover{background:var(--accent2);transform:translateY(-1px)}
+.btn-ghost{padding:7px 16px;border-radius:7px;font-size:13px;font-weight:500;color:var(--text2);border:1px solid var(--border);transition:all var(--trans)}
+.btn-ghost:hover{color:var(--text);border-color:var(--text3)}
+
+/* ── CONTAINER ──────────────────────────────────────────────── */
+.container{max-width:1120px;margin:0 auto;padding:0 24px;width:100%}
+
+/* ── HERO ────────────────────────────────────────────────────── */
+.hero{padding:72px 24px 56px;text-align:center}
+.hero-eyebrow{font-family:var(--font-m);font-size:11px;letter-spacing:3px;color:var(--accent);text-transform:uppercase;margin-bottom:20px}
+.hero-title{font-family:var(--font-d);font-size:clamp(40px,6vw,80px);line-height:1.05;margin-bottom:18px;letter-spacing:-1px}
+.hero-title em{color:var(--accent);font-style:italic}
+.hero-sub{color:var(--text2);font-size:17px;max-width:520px;margin:0 auto 36px}
+.hero-actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+.hero-stats{display:flex;gap:36px;justify-content:center;margin-top:52px;padding-top:40px;border-top:1px solid var(--border)}
+.stat-n{font-family:var(--font-d);font-size:32px;color:var(--accent)}
+.stat-l{font-size:12px;color:var(--text2);letter-spacing:.5px;margin-top:2px}
+
+/* ── SECTION ─────────────────────────────────────────────────── */
+.section{padding:48px 0}
+.section-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:28px}
+.section-title{font-family:var(--font-d);font-size:28px;letter-spacing:-.5px}
+.section-sub{color:var(--text2);font-size:13px;margin-top:4px}
+
+/* ── MEDIA TYPE CARDS ────────────────────────────────────────── */
+.media-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px}
+.media-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:20px 16px;text-align:center;cursor:pointer;transition:all var(--trans);position:relative;overflow:hidden}
+.media-card::before{content:'';position:absolute;inset:0;background:var(--accent);opacity:0;transition:opacity var(--trans)}
+.media-card:hover{border-color:var(--accent);transform:translateY(-2px)}
+.media-card:hover::before{opacity:.04}
+.media-card.selected{border-color:var(--accent);background:var(--bg3)}
+.media-icon{font-size:28px;margin-bottom:10px}
+.media-label{font-size:12px;font-weight:600;color:var(--text2);letter-spacing:.5px}
+
+/* ── FORMS ───────────────────────────────────────────────────── */
+.form-group{display:flex;flex-direction:column;gap:6px}
+.form-label{font-size:12px;font-weight:600;color:var(--text2);letter-spacing:.5px;text-transform:uppercase}
+.form-input{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-size:14px;color:var(--text);transition:border-color var(--trans);outline:none;width:100%}
+.form-input:focus{border-color:var(--accent)}
+.form-input::placeholder{color:var(--text3)}
+.form-select{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-size:14px;color:var(--text);transition:border-color var(--trans);outline:none;width:100%;appearance:none}
+.form-select:focus{border-color:var(--accent)}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.form-row-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+.form-hint{font-size:11px;color:var(--text3)}
+.form-error{font-size:12px;color:var(--danger);display:none}
+.form-error.show{display:block}
+
+/* ── CARD ────────────────────────────────────────────────────── */
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--card-r);overflow:hidden;transition:border-color var(--trans),transform var(--trans)}
+.card:hover{border-color:var(--border);transform:translateY(-2px)}
+.card-body{padding:20px}
+
+/* ── COLLECTION GRID ─────────────────────────────────────────── */
+.col-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px}
+.col-item{background:var(--bg2);border:1px solid var(--border);border-radius:10px;overflow:hidden;cursor:pointer;transition:all var(--trans);position:relative}
+.col-item:hover{border-color:var(--accent);transform:translateY(-3px);box-shadow:0 12px 32px rgba(0,0,0,.3)}
+.col-thumb{width:100%;aspect-ratio:3/4;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:36px;position:relative;overflow:hidden}
+.col-thumb img{width:100%;height:100%;object-fit:cover;position:absolute;inset:0}
+.col-info{padding:12px 14px}
+.col-title{font-weight:600;font-size:13px;margin-bottom:2px;line-height:1.3}
+.col-meta{font-size:11px;color:var(--text2)}
+.col-badge{position:absolute;top:8px;left:8px;background:rgba(0,0,0,.7);color:var(--text);font-size:10px;font-family:var(--font-m);padding:3px 7px;border-radius:4px;font-weight:500;backdrop-filter:blur(8px)}
+
+/* ── COLLECTION LIST ─────────────────────────────────────────── */
+.col-list-item{display:flex;align-items:center;gap:14px;padding:12px 16px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:all var(--trans)}
+.col-list-item:hover{border-color:var(--accent)}
+.col-list-thumb{width:44px;height:44px;background:var(--bg3);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;overflow:hidden}
+.col-list-thumb img{width:100%;height:100%;object-fit:cover}
+
+/* ── MODAL ───────────────────────────────────────────────────── */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:200;display:none;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(4px)}
+.modal-overlay.open{display:flex}
+.modal{background:var(--bg2);border:1px solid var(--border);border-radius:14px;width:100%;max-width:580px;max-height:90vh;overflow-y:auto;position:relative}
+.modal-lg{max-width:780px}
+.modal-header{padding:24px 24px 0;display:flex;align-items:center;justify-content:space-between}
+.modal-title{font-family:var(--font-d);font-size:22px}
+.modal-close{width:32px;height:32px;border-radius:50%;background:var(--bg3);color:var(--text2);display:flex;align-items:center;justify-content:center;font-size:16px;transition:all var(--trans)}
+.modal-close:hover{color:var(--text);background:var(--border)}
+.modal-body{padding:24px}
+.modal-footer{padding:0 24px 24px;display:flex;gap:10px;justify-content:flex-end}
+
+/* ── TABS ────────────────────────────────────────────────────── */
+.tabs{display:flex;border-bottom:1px solid var(--border);gap:0;margin-bottom:24px}
+.tab-btn{padding:10px 18px;font-size:13px;font-weight:500;color:var(--text2);border-bottom:2px solid transparent;transition:all var(--trans);margin-bottom:-1px}
+.tab-btn:hover{color:var(--text)}
+.tab-btn.active{color:var(--accent);border-bottom-color:var(--accent)}
+.tab-content{display:none}
+.tab-content.active{display:block}
+
+/* ── BADGE ───────────────────────────────────────────────────── */
+.badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;font-family:var(--font-m)}
+.badge-accent{background:rgba(200,169,110,.15);color:var(--accent)}
+.badge-muted{background:var(--bg3);color:var(--text2)}
+.badge-danger{background:rgba(214,78,78,.15);color:var(--danger)}
+.badge-success{background:rgba(78,171,109,.15);color:var(--success)}
+
+/* ── SCANNER ─────────────────────────────────────────────────── */
+.scanner-box{border:2px dashed var(--border);border-radius:12px;padding:36px;text-align:center;transition:border-color var(--trans);cursor:pointer}
+.scanner-box:hover{border-color:var(--accent)}
+.scanner-icon{font-size:40px;margin-bottom:12px;opacity:.6}
+.scan-preview{width:100%;max-height:240px;border-radius:8px;object-fit:contain;margin:14px 0;border:1px solid var(--border)}
+#barcode-input-line{display:flex;gap:10px;align-items:center}
+
+/* ── THEME PICKER ────────────────────────────────────────────── */
+.theme-grid{display:flex;gap:8px;flex-wrap:wrap}
+.theme-dot{width:28px;height:28px;border-radius:50%;cursor:pointer;border:2px solid transparent;transition:all var(--trans);position:relative}
+.theme-dot:hover,.theme-dot.active{border-color:var(--text);transform:scale(1.15)}
+.theme-dot[data-t="dark"]{background:linear-gradient(135deg,#0e0e0f,#c8a96e)}
+.theme-dot[data-t="dawn"]{background:linear-gradient(135deg,#faf7f2,#9b6b2f)}
+.theme-dot[data-t="slate"]{background:linear-gradient(135deg,#0d1117,#58a6ff)}
+.theme-dot[data-t="forest"]{background:linear-gradient(135deg,#0d1410,#6eba5e)}
+.theme-dot[data-t="rose"]{background:linear-gradient(135deg,#1a0d12,#e8748e)}
+.theme-dot[data-t="ink"]{background:linear-gradient(135deg,#f5f5f0,#1a1a18)}
+
+/* ── SORT / FILTER BAR ───────────────────────────────────────── */
+.filter-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:20px}
+.filter-bar .form-select{width:auto}
+.search-input{position:relative;flex:1;min-width:200px}
+.search-input input{padding-left:36px}
+.search-icon{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--text3);font-size:14px}
+.view-toggle{display:flex;background:var(--bg3);border-radius:7px;overflow:hidden;border:1px solid var(--border)}
+.view-toggle button{padding:6px 10px;font-size:13px;color:var(--text2);transition:all var(--trans)}
+.view-toggle button.active{background:var(--border);color:var(--text)}
+
+/* ── AUTH PAGE ───────────────────────────────────────────────── */
+.auth-wrap{flex:1;display:flex;align-items:center;justify-content:center;padding:40px 24px}
+.auth-box{width:100%;max-width:420px;background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:36px}
+.auth-logo{font-family:var(--font-d);font-size:28px;color:var(--accent);text-align:center;margin-bottom:6px}
+.auth-tagline{text-align:center;color:var(--text2);font-size:13px;margin-bottom:30px}
+.auth-divider{display:flex;align-items:center;gap:12px;margin:20px 0;color:var(--text3);font-size:12px}
+.auth-divider::before,.auth-divider::after{content:'';flex:1;height:1px;background:var(--border)}
+
+/* ── PROFILE ─────────────────────────────────────────────────── */
+.profile-hero{background:var(--bg2);border-bottom:1px solid var(--border);padding:36px 24px}
+.avatar{width:72px;height:72px;border-radius:50%;background:var(--bg3);border:2px solid var(--accent);display:flex;align-items:center;justify-content:center;font-size:28px;font-family:var(--font-d);color:var(--accent);overflow:hidden;flex-shrink:0}
+.avatar img{width:100%;height:100%;object-fit:cover}
+.profile-stats{display:flex;gap:24px}
+.p-stat-n{font-family:var(--font-d);font-size:22px;color:var(--accent)}
+.p-stat-l{font-size:11px;color:var(--text2)}
+
+/* ── TOAST ───────────────────────────────────────────────────── */
+#toast{position:fixed;bottom:24px;right:24px;z-index:1000;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.toast-msg{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:12px 18px;font-size:13px;box-shadow:0 8px 32px rgba(0,0,0,.3);display:flex;align-items:center;gap:10px;animation:slideUp .3s ease forwards;pointer-events:all}
+.toast-msg.success{border-left:3px solid var(--success)}
+.toast-msg.error{border-left:3px solid var(--danger)}
+@keyframes slideUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+
+/* ── WARN BANNER ─────────────────────────────────────────────── */
+.warn-banner{background:rgba(214,78,78,.1);border:1px solid rgba(214,78,78,.3);border-radius:8px;padding:12px 16px;font-size:12px;color:var(--danger);display:flex;gap:10px;align-items:flex-start;margin-bottom:16px}
+
+/* ── DETAIL PANEL ────────────────────────────────────────────── */
+.detail-cover{width:100%;aspect-ratio:3/4;background:var(--bg3);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:56px;overflow:hidden;max-height:260px;object-fit:cover}
+.detail-cover img{width:100%;height:100%;object-fit:cover;border-radius:10px}
+.detail-meta-table{width:100%;border-collapse:collapse}
+.detail-meta-table tr{border-bottom:1px solid var(--border)}
+.detail-meta-table tr:last-child{border-bottom:none}
+.detail-meta-table td{padding:8px 0;font-size:13px;vertical-align:top}
+.detail-meta-table td:first-child{color:var(--text2);width:120px;font-family:var(--font-m);font-size:11px}
+
+/* ── TRADE MESSAGES ──────────────────────────────────────────── */
+.msg-bubble{padding:10px 14px;border-radius:10px;max-width:75%;font-size:13px}
+.msg-bubble.me{background:var(--accent);color:#000;align-self:flex-end;border-bottom-right-radius:3px}
+.msg-bubble.them{background:var(--bg3);color:var(--text);border-bottom-left-radius:3px}
+.msg-time{font-size:10px;color:var(--text3);margin-top:3px;font-family:var(--font-m)}
+
+/* ── COMIC FIELDS ────────────────────────────────────────────── */
+.comic-tag{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:20px;font-size:11px;font-family:var(--font-m);color:var(--text2);cursor:pointer;transition:all var(--trans)}
+.comic-tag:hover,.comic-tag.active{background:var(--accent);color:#000;border-color:var(--accent)}
+.comic-tags-wrap{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+
+/* ── FOOTER ──────────────────────────────────────────────────── */
+footer{border-top:1px solid var(--border);padding:24px;text-align:center;color:var(--text3);font-size:12px;font-family:var(--font-m)}
+footer span{color:var(--accent)}
+
+/* ── RESPONSIVE ──────────────────────────────────────────────── */
+@media(max-width:640px){
+  .form-row,.form-row-3{grid-template-columns:1fr}
+  .hero{padding:48px 20px 36px}
+  nav{padding:0 16px}
+  .container{padding:0 16px}
+  .col-grid{grid-template-columns:repeat(auto-fill,minmax(160px,1fr))}
+  .profile-stats{gap:16px}
+}
+
+/* ── ANIMATIONS ──────────────────────────────────────────────── */
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.fade-in{animation:fadeIn .35s ease forwards}
 </style>
 </head>
 <body>
+<div id="app">
 
-<header>
-  <div class="logo">MEDIA<span>SCAN</span></div>
-  <div class="header-status">
-    <div><span class="status-dot"></span>SYSTEM ONLINE</div>
-    <div id="datetime" style="color: var(--accent); margin-top:2px;"></div>
+<!-- ── NAV ── -->
+<nav id="main-nav">
+  <div class="nav-brand serif" onclick="navigate('home')" style="cursor:pointer">
+    MusicNest <span id="nav-tagline">· collect everything</span>
   </div>
-</header>
-
-<div class="container">
-
-  <!-- Stats bar -->
-  <div class="stats-bar">
-    <div class="stat-cell">
-      <div class="stat-label">Total Scanned</div>
-      <div class="stat-value" id="stat-total">0</div>
-    </div>
-    <div class="stat-cell">
-      <div class="stat-label">Movies</div>
-      <div class="stat-value" id="stat-movies">0</div>
-    </div>
-    <div class="stat-cell">
-      <div class="stat-label">Music</div>
-      <div class="stat-value" id="stat-music">0</div>
-    </div>
-    <div class="stat-cell">
-      <div class="stat-label">Books</div>
-      <div class="stat-value" id="stat-books">0</div>
-    </div>
-    <div class="stat-cell">
-      <div class="stat-label">Games</div>
-      <div class="stat-value" id="stat-games">0</div>
+  <div class="nav-links" id="nav-links">
+    <button class="nav-btn active" onclick="navigate('home')" id="nb-home">Home</button>
+    <button class="nav-btn" onclick="navigate('collection')" id="nb-collection" style="display:none">Collection</button>
+    <button class="nav-btn" onclick="navigate('discover')" id="nb-discover">Discover</button>
+    <button class="nav-btn" onclick="navigate('trade')" id="nb-trade" style="display:none">Trading</button>
+  </div>
+  <div class="nav-actions">
+    <div class="theme-grid" id="theme-picker" style="display:none"></div>
+    <button class="btn-icon" onclick="toggleThemePicker()" title="Change theme">🎨</button>
+    <button class="btn-icon" onclick="openAddModal()" title="Add item" id="nav-add" style="display:none">＋</button>
+    <button class="btn-primary" onclick="navigate('login')" id="nav-login">Sign in</button>
+    <div class="flex items-center gap-2" id="nav-user" style="display:none">
+      <div class="avatar" style="width:34px;height:34px;font-size:14px" onclick="navigate('profile')" id="nav-avatar">?</div>
+      <button class="btn-ghost" onclick="logout()">Sign out</button>
     </div>
   </div>
+</nav>
 
-  <!-- Scanner Panel -->
-  <div class="panel" id="scanner-panel">
-    <div class="panel-header">
-      <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <rect x="3" y="3" width="18" height="18" rx="2"/>
-        <path d="M7 7h2v10H7zM11 7h1v10h-1zM14 7h1v10h-1zM17 7h-1v10h1z"/>
-      </svg>
-      <span class="panel-title">Barcode Scanner</span>
+<!-- ── TOAST ── -->
+<div id="toast"></div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     PAGE: HOME
+══════════════════════════════════════════════════════════════ -->
+<div class="page active" id="page-home">
+  <div class="hero container">
+    <div class="hero-eyebrow">Your Physical Media Universe</div>
+    <h1 class="hero-title">Catalog <em>everything</em><br>you own & love</h1>
+    <p class="hero-sub">Books, comics, CDs, vinyl, newspapers, games — log them all with a barcode scan or photo.</p>
+    <div class="hero-actions">
+      <button class="btn-primary" onclick="navigate('signup')" style="font-size:15px;padding:10px 28px" id="hero-cta">Start collecting free</button>
+      <button class="btn-ghost" onclick="navigate('discover')" style="font-size:15px;padding:10px 22px">Browse collections</button>
     </div>
+    <div class="hero-stats">
+      <div><div class="stat-n">12,400+</div><div class="stat-l">Items Cataloged</div></div>
+      <div><div class="stat-n">3,200+</div><div class="stat-l">Collectors</div></div>
+      <div><div class="stat-n">14</div><div class="stat-l">Media Types</div></div>
+      <div><div class="stat-n">850+</div><div class="stat-l">Trades Completed</div></div>
+    </div>
+  </div>
 
-    <div class="scanner-area" id="scanner-area">
-      <div id="interactive"></div>
-      <div class="scanner-overlay" id="scanner-overlay" style="display:none;">
-        <div class="scan-frame">
-          <div class="corner-bl"></div>
-          <div class="corner-br"></div>
-          <div class="scan-line-anim"></div>
+  <!-- Media types -->
+  <div class="container section">
+    <div class="section-header">
+      <div><div class="section-title serif">What can you log?</div><div class="section-sub">Every physical medium, meticulously organized</div></div>
+    </div>
+    <div class="media-grid" id="home-media-grid"></div>
+  </div>
+
+  <!-- Features -->
+  <div style="background:var(--bg2);border-top:1px solid var(--border);border-bottom:1px solid var(--border);padding:48px 0">
+    <div class="container">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:28px">
+        <div>
+          <div style="font-size:28px;margin-bottom:12px">📷</div>
+          <div class="fw-600" style="margin-bottom:6px">Scan to add</div>
+          <div class="text-muted text-sm">Photograph a barcode, QR code, or cover — we identify it instantly and fill in all the details.</div>
+        </div>
+        <div>
+          <div style="font-size:28px;margin-bottom:12px">🔍</div>
+          <div class="fw-600" style="margin-bottom:6px">Niche detail fields</div>
+          <div class="text-muted text-sm">Track print variants, CGC grades, newsstand vs. direct editions, signatories, convention stamps, and more.</div>
+        </div>
+        <div>
+          <div style="font-size:28px;margin-bottom:12px">🔄</div>
+          <div class="fw-600" style="margin-bottom:6px">Community trading</div>
+          <div class="text-muted text-sm">Message other collectors, propose trades, and manage your wishlist — all in one place.</div>
+        </div>
+        <div>
+          <div style="font-size:28px;margin-bottom:12px">📊</div>
+          <div class="fw-600" style="margin-bottom:6px">Smart sorting</div>
+          <div class="text-muted text-sm">Sort by title, author, date, condition, grade, binding, edition — any field you track.</div>
         </div>
       </div>
-      <div class="scanner-idle" id="scanner-idle">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <path d="M3 9V5a2 2 0 012-2h4M3 15v4a2 2 0 002 2h4M21 9V5a2 2 0 00-2-2h-4M21 15v4a2 2 0 01-2 2h-4"/>
-          <line x1="7" y1="12" x2="17" y2="12"/>
-        </svg>
-        <p>CAMERA INACTIVE</p>
-        <p style="font-size:0.62rem; opacity:0.5;">Press START to activate scanner</p>
-      </div>
-    </div>
-
-    <div class="scanner-controls">
-      <button class="btn btn-primary" id="btn-start" onclick="startScanner()">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
-        START SCAN
-      </button>
-      <button class="btn btn-danger" id="btn-stop" onclick="stopScanner()" disabled>
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="18" height="18"/></svg>
-        STOP
-      </button>
-      <button class="btn" onclick="clearResults()">CLEAR</button>
-    </div>
-
-    <div class="manual-input">
-      <input type="text" class="barcode-input" id="manual-barcode" placeholder="Enter barcode manually (ISBN, UPC, EAN)..." maxlength="30">
-      <button class="btn btn-primary" onclick="lookupManual()">LOOKUP</button>
     </div>
   </div>
-
-  <!-- Results Panel -->
-  <div class="panel results-panel" id="results-panel">
-    <div class="panel-header">
-      <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
-        <polyline points="14,2 14,8 20,8"/>
-        <line x1="16" y1="13" x2="8" y2="13"/>
-        <line x1="16" y1="17" x2="8" y2="17"/>
-        <polyline points="10,9 9,9 8,9"/>
-      </svg>
-      <span class="panel-title">Media Intelligence Report</span>
-    </div>
-
-    <div class="result-card" id="result-card">
-      <div class="no-result" id="no-result">
-        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.2">
-          <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35M11 8v6M8 11h6"/>
-        </svg>
-        <p>AWAITING SCAN INPUT</p>
-        <p style="font-size:0.62rem; opacity:0.5;">Scan a barcode or enter manually</p>
-      </div>
-      <div id="result-display" style="display:none;"></div>
-    </div>
-  </div>
-
-  <!-- History Panel -->
-  <div class="panel history-panel">
-    <div class="panel-header" style="justify-content: space-between;">
-      <div style="display:flex; align-items:center; gap:0.75rem;">
-        <svg class="panel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polyline points="12,8 12,12 14,14"/>
-          <path d="M3.05 11a9 9 0 119 9.95"/>
-          <path d="M3 3v5h5"/>
-        </svg>
-        <span class="panel-title">Scan History</span>
-      </div>
-      <button class="btn" style="font-size:0.62rem; padding:0.35rem 0.75rem;" onclick="clearHistory()">CLEAR HISTORY</button>
-    </div>
-    <div class="history-list" id="history-list">
-      <div class="history-empty" id="history-empty">NO SCANS RECORDED</div>
-    </div>
-  </div>
-
 </div>
 
-<!-- Toast -->
-<div class="toast" id="toast"></div>
-
-<script>
-let scannerRunning = false;
-let lastScanned = '';
-let scanHistory = JSON.parse(localStorage.getItem('mediascan_history') || '[]');
-let stats = JSON.parse(localStorage.getItem('mediascan_stats') || '{"total":0,"movies":0,"music":0,"books":0,"games":0}');
-
-// DateTime
-function updateClock() {
-  const now = new Date();
-  document.getElementById('datetime').textContent =
-    now.toLocaleDateString('en-US', {year:'2-digit',month:'2-digit',day:'2-digit'}) +
-    ' ' + now.toLocaleTimeString('en-US', {hour12:false});
-}
-setInterval(updateClock, 1000);
-updateClock();
-
-// Render history on load
-renderHistory();
-updateStats();
-
-// ── Scanner ──────────────────────────────────────────────────────────
-
-function startScanner() {
-  document.getElementById('scanner-idle').style.display = 'none';
-  document.getElementById('scanner-overlay').style.display = 'block';
-  document.getElementById('btn-start').disabled = true;
-  document.getElementById('btn-stop').disabled = false;
-
-  Quagga.init({
-    inputStream: {
-      name: 'Live',
-      type: 'LiveStream',
-      target: document.querySelector('#interactive'),
-      constraints: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
-    },
-    decoder: {
-      readers: ['ean_reader', 'ean_8_reader', 'upc_reader', 'upc_e_reader', 'code_128_reader', 'code_39_reader', 'i2of5_reader'],
-    },
-    locate: true,
-    locator: { patchSize: 'medium', halfSample: true },
-  }, function(err) {
-    if (err) {
-      showToast('Camera error: ' + err.message, 'error');
-      stopScanner();
-      return;
-    }
-    Quagga.start();
-    scannerRunning = true;
-  });
-
-  Quagga.onDetected(function(result) {
-    const code = result.codeResult.code;
-    if (code && code !== lastScanned) {
-      lastScanned = code;
-      onBarcodeDetected(code);
-      setTimeout(() => { lastScanned = ''; }, 3000);
-    }
-  });
-}
-
-function stopScanner() {
-  if (scannerRunning) {
-    Quagga.stop();
-    scannerRunning = false;
-  }
-  document.getElementById('scanner-idle').style.display = 'flex';
-  document.getElementById('scanner-overlay').style.display = 'none';
-  document.getElementById('btn-start').disabled = false;
-  document.getElementById('btn-stop').disabled = true;
-}
-
-function lookupManual() {
-  const val = document.getElementById('manual-barcode').value.trim();
-  if (!val) { showToast('Please enter a barcode', 'error'); return; }
-  onBarcodeDetected(val);
-  document.getElementById('manual-barcode').value = '';
-}
-
-document.getElementById('manual-barcode').addEventListener('keydown', e => {
-  if (e.key === 'Enter') lookupManual();
-});
-
-// ── Barcode Detection ─────────────────────────────────────────────────
-
-function onBarcodeDetected(code) {
-  showToast('Barcode detected: ' + code);
-  showLoading();
-  lookupBarcode(code);
-}
-
-// ── API Lookup ────────────────────────────────────────────────────────
-
-async function lookupBarcode(barcode) {
-  barcode = barcode.trim();
-
-  // Determine type by length/prefix
-  const isISBN = /^97[89]/.test(barcode) || (barcode.length === 10 || barcode.length === 13) && /^\d+$/.test(barcode);
-  const isUPC  = barcode.length === 12;
-
-  let result = null;
-
-  // Try Open Library (books)
-  if (isISBN || barcode.length === 13) {
-    result = await tryOpenLibrary(barcode);
-  }
-
-  // Try MusicBrainz via barcode
-  if (!result) {
-    result = await tryMusicBrainz(barcode);
-  }
-
-  // Try UPC Item DB (movies/misc)
-  if (!result) {
-    result = await tryUPCItemDB(barcode);
-  }
-
-  // Fallback: Try Open Library without type check
-  if (!result && !isISBN) {
-    result = await tryOpenLibrary(barcode);
-  }
-
-  if (result) {
-    displayResult(result, barcode);
-    addToHistory(result, barcode);
-  } else {
-    displayNotFound(barcode);
-  }
-}
-
-async function tryOpenLibrary(barcode) {
-  try {
-    const url = `https://openlibrary.org/api/books?bibkeys=ISBN:${barcode}&format=json&jscmd=data`;
-    const res = await fetch(url);
-    const data = await res.json();
-    const key = `ISBN:${barcode}`;
-    if (!data[key]) return null;
-
-    const book = data[key];
-    const authors = book.authors ? book.authors.map(a => a.name).join(', ') : 'Unknown';
-    const cover = book.cover ? (book.cover.medium || book.cover.small || null) : null;
-    const subjects = book.subjects ? book.subjects.slice(0,4).map(s => s.name||s).join(', ') : '';
-    const publisher = book.publishers ? book.publishers.map(p=>p.name).join(', ') : 'Unknown';
-
-    return {
-      type: 'book',
-      title: book.title || 'Unknown Title',
-      subtitle: authors,
-      year: book.publish_date || 'Unknown',
-      cover: cover,
-      details: [
-        { label: 'Author(s)', value: authors },
-        { label: 'Publisher', value: publisher },
-        { label: 'Published', value: book.publish_date || 'Unknown' },
-        { label: 'Pages', value: book.number_of_pages ? book.number_of_pages + ' pages' : 'N/A' },
-        { label: 'Language', value: book.languages ? book.languages.map(l=>l.name||l.key).join(', ') : 'English' },
-        { label: 'ISBN', value: barcode },
-        subjects ? { label: 'Subjects', value: subjects, full: true } : null,
-        book.url ? { label: 'Open Library', value: '<a href="'+book.url+'" target="_blank" style="color:var(--accent)">View Record ↗</a>', full: true } : null,
-      ].filter(Boolean),
-      rating: null,
-    };
-  } catch(e) { return null; }
-}
-
-async function tryMusicBrainz(barcode) {
-  try {
-    const url = `https://musicbrainz.org/ws/2/release/?query=barcode:${barcode}&fmt=json&limit=1`;
-    const res = await fetch(url, { headers: { 'User-Agent': 'MediaScanApp/1.0 (example@example.com)' } });
-    const data = await res.json();
-    if (!data.releases || data.releases.length === 0) return null;
-
-    const r = data.releases[0];
-    const artist = r['artist-credit'] ? r['artist-credit'].map(a => a.name || (a.artist && a.artist.name)).filter(Boolean).join(', ') : 'Unknown Artist';
-    const label = r['label-info'] ? r['label-info'].map(l => l.label && l.label.name).filter(Boolean).join(', ') : 'Unknown Label';
-
-    return {
-      type: 'music',
-      title: r.title || 'Unknown Title',
-      subtitle: artist,
-      year: r.date ? r.date.substring(0,4) : 'Unknown',
-      cover: null,
-      details: [
-        { label: 'Artist', value: artist },
-        { label: 'Label', value: label || 'Unknown' },
-        { label: 'Year', value: r.date ? r.date.substring(0,4) : 'Unknown' },
-        { label: 'Country', value: r.country || 'Unknown' },
-        { label: 'Format', value: r.media ? r.media.map(m=>m.format).filter(Boolean).join(', ') : 'Unknown' },
-        { label: 'Tracks', value: r.media ? r.media.reduce((sum,m) => sum + (m['track-count']||0), 0) + ' tracks' : 'N/A' },
-        { label: 'Status', value: r.status || 'Unknown' },
-        { label: 'Barcode', value: barcode },
-      ],
-      rating: null,
-      mbid: r.id,
-    };
-  } catch(e) { return null; }
-}
-
-async function tryUPCItemDB(barcode) {
-  try {
-    const res = await fetch(`https://api.upcitemdb.com/prod/trial/lookup?upc=${barcode}`);
-    const data = await res.json();
-    if (!data.items || data.items.length === 0) return null;
-
-    const item = data.items[0];
-    const category = (item.category || '').toLowerCase();
-
-    let type = 'unknown';
-    if (/movie|film|blu|dvd|video/.test(category) || /movie|film|blu|dvd/.test((item.title||'').toLowerCase())) type = 'movie';
-    else if (/music|cd|vinyl|album/.test(category)) type = 'music';
-    else if (/game|xbox|playstation|nintendo|pc game/.test(category)) type = 'game';
-    else if (/book/.test(category)) type = 'book';
-
-    return {
-      type: type,
-      title: item.title || 'Unknown Product',
-      subtitle: item.brand || item.category || '',
-      year: item.creation_time ? new Date(item.creation_time*1000).getFullYear().toString() : 'Unknown',
-      cover: item.images && item.images.length ? item.images[0] : null,
-      details: [
-        item.brand ? { label: 'Brand', value: item.brand } : null,
-        item.category ? { label: 'Category', value: item.category } : null,
-        item.color ? { label: 'Color', value: item.color } : null,
-        item.size ? { label: 'Size', value: item.size } : null,
-        item.weight ? { label: 'Weight', value: item.weight } : null,
-        { label: 'UPC', value: barcode },
-        item.description ? { label: 'Description', value: item.description, full: true } : null,
-      ].filter(Boolean),
-      rating: null,
-    };
-  } catch(e) { return null; }
-}
-
-// ── Display ───────────────────────────────────────────────────────────
-
-function showLoading() {
-  document.getElementById('no-result').style.display = 'none';
-  document.getElementById('result-display').style.display = 'block';
-  document.getElementById('result-display').innerHTML = `
-    <div class="loading-state">
-      <div class="spinner"></div>
-      <div class="loading-text">QUERYING DATABASES...<br><span style="opacity:0.5; font-size:0.65rem;">Open Library · MusicBrainz · UPCItemDB</span></div>
-    </div>`;
-}
-
-function displayResult(result, barcode) {
-  const typeLabels = { movie: 'FILM', music: 'MUSIC', book: 'BOOK', game: 'GAME', unknown: 'ITEM' };
-  const typeEmojis = { movie: '🎬', music: '🎵', book: '📖', game: '🎮', unknown: '📦' };
-  const badgeClass = { movie:'badge-movie', music:'badge-music', book:'badge-book', game:'badge-game', unknown:'badge-unknown' };
-
-  let coverHtml = result.cover
-    ? `<img src="${result.cover}" alt="cover" onerror="this.parentNode.innerHTML='<div class=cover-placeholder>${typeEmojis[result.type]}</div>'">`
-    : `<div class="cover-placeholder">${typeEmojis[result.type]}</div>`;
-
-  let detailsHtml = result.details.map(d =>
-    `<div class="detail-item${d.full?' full':''}">
-      <div class="detail-label">${d.label}</div>
-      <div class="detail-value">${d.value}</div>
-    </div>`
-  ).join('');
-
-  if (result.rating) {
-    detailsHtml += `<div class="detail-item full">
-      <div class="detail-label">Rating</div>
-      <div class="rating-bar">
-        <div class="bar-track"><div class="bar-fill" style="width:${result.rating*10}%"></div></div>
-        <span class="rating-num">${result.rating}/10</span>
-      </div>
-    </div>`;
-  }
-
-  document.getElementById('result-display').innerHTML = `
-    <div class="media-result result-in">
-      <div class="media-header">
-        <div class="media-cover">${coverHtml}</div>
-        <div class="media-title-block">
-          <span class="media-type-badge ${badgeClass[result.type]}">${typeLabels[result.type]}</span>
-          <div class="media-title">${escHtml(result.title)}</div>
-          <div class="media-subtitle">${escHtml(result.subtitle)}</div>
+<!-- ══════════════════════════════════════════════════════════════
+     PAGE: LOGIN
+══════════════════════════════════════════════════════════════ -->
+<div class="page" id="page-login">
+  <div class="auth-wrap">
+    <div class="auth-box fade-in">
+      <div class="auth-logo">MusicNest</div>
+      <div class="auth-tagline">Sign in to your collection</div>
+      <div class="flex-col gap-3">
+        <div class="form-group">
+          <label class="form-label">Email, username or phone</label>
+          <input class="form-input" id="login-id" placeholder="you@example.com" type="text">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Password</label>
+          <input class="form-input" id="login-pw" type="password" placeholder="••••••••">
+          <div class="form-error" id="login-err">Invalid credentials. Please try again.</div>
+        </div>
+        <button class="btn-primary w-full" style="padding:11px;font-size:14px" onclick="doLogin()">Sign in</button>
+        <div style="text-align:center;font-size:12px;color:var(--text2)">
+          Don't have an account? <a onclick="navigate('signup')" style="color:var(--accent);cursor:pointer">Create one</a>
         </div>
       </div>
-      <div class="details-grid">${detailsHtml}</div>
-      <div class="barcode-display">
-        <span style="color:var(--muted); font-size:0.62rem; letter-spacing:0.1em;">BARCODE</span>
-        <span class="barcode-num">${barcode}</span>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     PAGE: SIGNUP
+══════════════════════════════════════════════════════════════ -->
+<div class="page" id="page-signup">
+  <div class="auth-wrap">
+    <div class="auth-box fade-in">
+      <div class="auth-logo">MusicNest</div>
+      <div class="auth-tagline">Start your collection today</div>
+      <div class="flex-col gap-3">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">First name</label>
+            <input class="form-input" id="su-first" placeholder="Jane">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Last name</label>
+            <input class="form-input" id="su-last" placeholder="Doe">
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Username</label>
+          <input class="form-input" id="su-user" placeholder="@janecollects">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Email</label>
+          <input class="form-input" id="su-email" type="email" placeholder="jane@example.com">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Phone (optional)</label>
+          <input class="form-input" id="su-phone" type="tel" placeholder="+1 555 000 0000">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Password</label>
+          <input class="form-input" id="su-pw" type="password" placeholder="Min. 8 characters">
+        </div>
+        <div class="form-error" id="su-err"></div>
+        <button class="btn-primary w-full" style="padding:11px;font-size:14px" onclick="doSignup()">Create account</button>
+        <div style="text-align:center;font-size:12px;color:var(--text2)">
+          Already have an account? <a onclick="navigate('login')" style="color:var(--accent);cursor:pointer">Sign in</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     PAGE: COLLECTION
+══════════════════════════════════════════════════════════════ -->
+<div class="page" id="page-collection">
+  <div class="container section">
+    <!-- Filter bar -->
+    <div class="filter-bar">
+      <div class="search-input">
+        <span class="search-icon">🔍</span>
+        <input class="form-input" id="col-search" placeholder="Search your collection…" oninput="renderCollection()">
+      </div>
+      <select class="form-select" id="col-filter-type" onchange="renderCollection()">
+        <option value="">All types</option>
+      </select>
+      <select class="form-select" id="col-sort" onchange="renderCollection()">
+        <option value="date-added">Date Added</option>
+        <option value="title">Title (A–Z)</option>
+        <option value="author">Author / Artist</option>
+        <option value="pub-date">Publication Date</option>
+        <option value="condition">Condition</option>
+        <option value="type">Media Type</option>
+      </select>
+      <div class="view-toggle">
+        <button onclick="setView('grid')" id="vt-grid" class="active">▦</button>
+        <button onclick="setView('list')" id="vt-list">≡</button>
+      </div>
+      <button class="btn-primary" onclick="openAddModal()">＋ Add item</button>
+    </div>
+
+    <!-- Empty state -->
+    <div id="col-empty" style="text-align:center;padding:60px 0;display:none">
+      <div style="font-size:48px;margin-bottom:16px;opacity:.4">📦</div>
+      <div class="serif" style="font-size:22px;margin-bottom:8px">Nothing here yet</div>
+      <div class="text-muted" style="margin-bottom:20px">Add your first item to start your collection.</div>
+      <button class="btn-primary" onclick="openAddModal()">＋ Add your first item</button>
+    </div>
+
+    <!-- Grid -->
+    <div class="col-grid" id="col-grid"></div>
+    <!-- List -->
+    <div class="flex-col gap-2" id="col-list" style="display:none"></div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     PAGE: DISCOVER
+══════════════════════════════════════════════════════════════ -->
+<div class="page" id="page-discover">
+  <div class="container section">
+    <div class="section-header">
+      <div><div class="section-title serif">Community Collections</div><div class="section-sub">Browse what other collectors are cataloging</div></div>
+    </div>
+    <div class="col-grid" id="discover-grid"></div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     PAGE: TRADE
+══════════════════════════════════════════════════════════════ -->
+<div class="page" id="page-trade">
+  <div class="container section">
+    <div class="warn-banner">
+      ⚠️ <span><strong>Off-site trading disclaimer:</strong> MusicNest provides messaging to connect collectors. All trades happen outside our platform. MusicNest is not responsible for any transactions, disputes, lost items, or fraud. Always meet in safe public locations and never send payment before verifying an item. Trade at your own risk.</span>
+    </div>
+    <div class="tabs">
+      <button class="tab-btn active" onclick="switchTab('messages','trade')">💬 Messages</button>
+      <button class="tab-btn" onclick="switchTab('wishlist','trade')">✨ Wishlist</button>
+      <button class="tab-btn" onclick="switchTab('find-traders','trade')">🔍 Find Traders</button>
+    </div>
+    <div class="tab-content active" id="tab-messages">
+      <div style="display:grid;grid-template-columns:240px 1fr;gap:16px;min-height:400px">
+        <div class="flex-col gap-2" id="convo-list"></div>
+        <div class="card flex-col" style="min-height:350px">
+          <div class="card-body flex-col" style="flex:1;justify-content:space-between;gap:12px" id="chat-panel">
+            <div style="text-align:center;padding:40px;color:var(--text3)">
+              <div style="font-size:32px;margin-bottom:10px">💬</div>
+              Select a conversation or start a new one
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="tab-content" id="tab-wishlist">
+      <div class="flex items-center gap-2" style="margin-bottom:16px">
+        <input class="form-input" id="wish-input" placeholder="Add an item to your wishlist…" style="flex:1">
+        <select class="form-select" id="wish-type" style="width:160px">
+          <option value="">Any type</option>
+        </select>
+        <button class="btn-primary" onclick="addWish()">Add</button>
+      </div>
+      <div class="flex-col gap-2" id="wishlist-items"></div>
+    </div>
+    <div class="tab-content" id="tab-find-traders">
+      <div class="col-grid" id="traders-grid"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     PAGE: PROFILE
+══════════════════════════════════════════════════════════════ -->
+<div class="page" id="page-profile">
+  <div class="profile-hero">
+    <div class="container flex items-center gap-4">
+      <div class="avatar" id="prof-avatar" style="width:72px;height:72px;font-size:30px">?</div>
+      <div style="flex:1">
+        <div style="font-size:22px;font-weight:600" id="prof-name">—</div>
+        <div class="text-muted text-sm" id="prof-username">—</div>
+        <div class="text-muted text-sm" id="prof-member">Member since —</div>
+      </div>
+      <button class="btn-ghost" onclick="openProfileEdit()">✏️ Edit profile</button>
+    </div>
+    <div class="container" style="margin-top:24px">
+      <div class="profile-stats">
+        <div><div class="p-stat-n" id="pstat-items">0</div><div class="p-stat-l">Items</div></div>
+        <div><div class="p-stat-n" id="pstat-types">0</div><div class="p-stat-l">Media types</div></div>
+        <div><div class="p-stat-n" id="pstat-trades">0</div><div class="p-stat-l">Trades</div></div>
+        <div><div class="p-stat-n" id="pstat-wish">0</div><div class="p-stat-l">Wishlist</div></div>
+      </div>
+    </div>
+  </div>
+  <div class="container section">
+    <div class="tabs">
+      <button class="tab-btn active" onclick="switchTab('prof-collection','profile')">Collection</button>
+      <button class="tab-btn" onclick="switchTab('prof-settings','profile')">Settings</button>
+    </div>
+    <div class="tab-content active" id="tab-prof-collection">
+      <div class="col-grid" id="prof-col-grid"></div>
+    </div>
+    <div class="tab-content" id="tab-prof-settings">
+      <div class="flex-col gap-3" style="max-width:440px">
+        <div class="form-group">
+          <label class="form-label">Display name</label>
+          <input class="form-input" id="set-name">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Bio</label>
+          <textarea class="form-input" id="set-bio" rows="3" placeholder="Tell others about your collection…" style="resize:vertical"></textarea>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Email</label>
+          <input class="form-input" id="set-email" type="email">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Theme</label>
+          <div class="theme-grid" id="settings-theme-picker"></div>
+        </div>
+        <button class="btn-primary" style="width:fit-content;padding:9px 24px" onclick="saveSettings()">Save changes</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     MODAL: ADD ITEM
+══════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="modal-add">
+  <div class="modal modal-lg">
+    <div class="modal-header">
+      <div class="modal-title serif">Add to collection</div>
+      <button class="modal-close" onclick="closeModal('modal-add')">✕</button>
+    </div>
+    <div class="modal-body">
+      <!-- Step 1: pick type -->
+      <div id="add-step-1">
+        <div style="margin-bottom:16px;font-size:13px;color:var(--text2)">Select media type</div>
+        <div class="media-grid" id="add-media-grid"></div>
+      </div>
+      <!-- Step 2: scan or manual -->
+      <div id="add-step-2" style="display:none">
+        <button class="btn-ghost" style="margin-bottom:16px;font-size:12px" onclick="backToStep1()">← Back</button>
+        <div class="tabs" style="margin-bottom:16px">
+          <button class="tab-btn active" onclick="switchTab('scan-tab','add')">📷 Scan</button>
+          <button class="tab-btn" onclick="switchTab('manual-tab','add')">✍️ Manual entry</button>
+        </div>
+        <div class="tab-content active" id="tab-scan-tab">
+          <div class="scanner-box" id="scan-drop" onclick="document.getElementById('scan-file').click()">
+            <div class="scanner-icon">📷</div>
+            <div class="fw-500">Click to upload a photo or scan</div>
+            <div class="text-muted text-sm" style="margin-top:6px">Barcode · QR code · Cover art</div>
+            <input type="file" id="scan-file" accept="image/*" style="display:none" onchange="handleScanFile(event)">
+          </div>
+          <img id="scan-preview-img" class="scan-preview" style="display:none">
+          <div id="barcode-input-line" style="margin-top:14px">
+            <input class="form-input" id="barcode-manual" placeholder="Or type/paste a barcode / ISBN / UPC…" style="flex:1">
+            <button class="btn-primary" onclick="lookupBarcode()">Look up</button>
+          </div>
+          <div id="scan-result" style="margin-top:12px;display:none">
+            <div class="badge badge-success" style="margin-bottom:8px">✓ Item found</div>
+            <div id="scan-result-info" style="font-size:13px;color:var(--text2)"></div>
+          </div>
+        </div>
+        <div class="tab-content" id="tab-manual-tab">
+          <div class="flex-col gap-3" id="manual-form-fields"></div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer" id="add-footer" style="display:none">
+      <button class="btn-ghost" onclick="closeModal('modal-add')">Cancel</button>
+      <button class="btn-primary" onclick="saveItem()">Save to collection</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     MODAL: ITEM DETAIL
+══════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="modal-detail">
+  <div class="modal modal-lg">
+    <div class="modal-header">
+      <div class="modal-title serif" id="detail-title">Item Detail</div>
+      <button class="modal-close" onclick="closeModal('modal-detail')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="display:grid;grid-template-columns:180px 1fr;gap:24px">
+        <div>
+          <div class="detail-cover" id="detail-cover">📦</div>
+          <div class="flex-col gap-2" style="margin-top:12px">
+            <button class="btn-ghost w-full" style="font-size:12px" onclick="openTrade()">💬 Trade / Message</button>
+            <button class="btn-ghost w-full" style="font-size:12px;color:var(--danger)" onclick="deleteItem()">🗑 Remove</button>
+          </div>
+        </div>
+        <div>
+          <table class="detail-meta-table" id="detail-meta"></table>
+          <div id="detail-extra" style="margin-top:16px"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════
+     MODAL: TRADE / MESSAGE
+══════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="modal-trade">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title serif">Contact Collector</div>
+      <button class="modal-close" onclick="closeModal('modal-trade')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="warn-banner">⚠️ Trading happens outside MusicNest. We are not responsible for transactions, disputes, or lost items. Proceed with caution.</div>
+      <div class="flex-col gap-3">
+        <div class="form-group">
+          <label class="form-label">To</label>
+          <input class="form-input" id="trade-to" placeholder="Username or email" value="community_user">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Message</label>
+          <textarea class="form-input" id="trade-msg" rows="4" placeholder="Hi! I'm interested in trading for your item…" style="resize:vertical"></textarea>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-ghost" onclick="closeModal('modal-trade')">Cancel</button>
+      <button class="btn-primary" onclick="sendTradeMessage()">Send message</button>
+    </div>
+  </div>
+</div>
+
+<!-- footer -->
+<footer id="main-footer">
+  <div>MusicNest © 2025 · <span>Collect Everything</span> · Built for physical media lovers</div>
+  <div style="margin-top:6px">Trading disclaimer: all trades occur off-platform. MusicNest bears no responsibility for any transactions.</div>
+</footer>
+
+</div><!-- #app -->
+
+<script>
+/* ════════════════════════════════════════════════════════════
+   STATE
+═══════════════════════════════════════════════════════════════ */
+let state = {
+  user: null,
+  theme: 'dark',
+  collection: [],
+  wishlist: [],
+  messages: [],
+  trades: 0,
+  view: 'grid',
+  selectedType: null,
+  editingItem: null,
+  detailItem: null,
+};
+
+/* ────── MEDIA TYPES ───────────────────────────────────── */
+const MEDIA_TYPES = [
+  { id:'cd',       icon:'💿', label:'CD',           fields:['artist','album','year','label','catalog','pressing','condition','format','notes'] },
+  { id:'vinyl',    icon:'🎵', label:'Vinyl',         fields:['artist','album','year','label','catalog','pressing','speed','condition','notes'] },
+  { id:'cassette', icon:'📼', label:'Cassette',      fields:['artist','album','year','label','condition','notes'] },
+  { id:'book',     icon:'📗', label:'Book',          fields:['title','author','publisher','pub_year','isbn','edition','binding','condition','genre','language','notes'] },
+  { id:'comic',    icon:'🦸', label:'Comic Book',    fields:['title','issue','publisher','pub_date','cover_artist','writer','penciler','inker','colorist','variant','print_run','edition_type','grade','grader','newsstand','printing','signed','stamp','condition','notes'], isComic:true },
+  { id:'manga',    icon:'📘', label:'Manga',         fields:['title','volume','publisher','pub_year','author','edition','condition','notes'] },
+  { id:'newspaper',icon:'📰', label:'Newspaper',     fields:['title','issue_date','headline','edition','condition','notes'] },
+  { id:'magazine', icon:'📖', label:'Magazine',      fields:['title','issue','pub_date','publisher','condition','notes'] },
+  { id:'game',     icon:'🎮', label:'Video Game',    fields:['title','platform','publisher','year','region','disc_count','condition','complete','notes'] },
+  { id:'dvd',      icon:'📀', label:'DVD / Blu-ray', fields:['title','year','studio','format','region','condition','notes'] },
+  { id:'vhs',      icon:'📹', label:'VHS',           fields:['title','year','studio','condition','notes'] },
+  { id:'map',      icon:'🗺', label:'Map / Poster',  fields:['title','publisher','year','size','condition','notes'] },
+  { id:'photo',    icon:'🖼', label:'Photograph',    fields:['subject','photographer','year','size','medium','condition','notes'] },
+  { id:'other',    icon:'📦', label:'Other',         fields:['title','creator','year','type','condition','notes'] },
+];
+
+const FIELD_LABELS = {
+  title:'Title', artist:'Artist / Band', author:'Author', album:'Album',
+  year:'Year', pub_year:'Year', pub_date:'Publication Date', issue_date:'Issue Date',
+  publisher:'Publisher', label:'Label', catalog:'Catalog #', pressing:'Pressing / Country',
+  speed:'Speed (RPM)', condition:'Condition', format:'Format', notes:'Notes',
+  isbn:'ISBN', edition:'Edition', binding:'Binding', genre:'Genre', language:'Language',
+  issue:'Issue #', cover_artist:'Cover Artist', writer:'Writer', penciler:'Penciler',
+  inker:'Inker', colorist:'Colorist', variant:'Variant', print_run:'Print Run',
+  edition_type:'Edition Type', grade:'Grade', grader:'Graded By', newsstand:'Newsstand?',
+  printing:'Printing #', signed:'Signed?', stamp:'Stamp / Sticker',
+  headline:'Headline', volume:'Volume #', platform:'Platform', region:'Region',
+  disc_count:'Disc Count', complete:'Complete in Box?', studio:'Studio',
+  subject:'Subject', photographer:'Photographer', size:'Size / Dimensions',
+  medium:'Medium', creator:'Creator', type:'Type / Category', format:'Format'
+};
+
+const COMIC_SPECIAL = {
+  edition_type:['Direct Edition','Newsstand','Whitman','Type 1A','Type 1B','Canadian Price Variant','UK Price Variant','Australian Price Variant','Mark Jewelers','35¢ Price Variant','File Copy'],
+  variant:['Standard','2nd Print','3rd Print','Error / Misprint','Cover A','Cover B','Foil','Embossed','Glow-in-dark','Polybag','Gatefold','Recalled','Convention Exclusive','Retailer Incentive','Sketch Cover'],
+  grade:['Ungraded','10.0 Gem Mint','9.9 Mint','9.8 NM/MT','9.6 NM+','9.4 NM','9.2 NM-','9.0 VF/NM','8.5 VF+','8.0 VF','7.5 VF-','7.0 FN/VF','6.5 FN+','6.0 FN','5.5 FN-','5.0 VG/FN','4.5 VG+','4.0 VG','3.5 VG-','3.0 GD/VG','2.5 GD+','2.0 GD','1.8 GD-','1.5 FR/GD','1.0 FR','0.5 P'],
+  grader:['CGC','CBCS','PGX','CGCC','Self-graded'],
+};
+
+const CONDITION_OPTIONS = ['Mint','Near Mint','Very Fine','Fine','Very Good','Good','Fair','Poor'];
+const BINDING_OPTIONS = ['Hardcover','Softcover / Paperback','Spiral','Sewn','Perfect Bound','Board Book','Leatherbound'];
+
+/* ════════════════════════════════════════════════════════════
+   LOCAL STORAGE PERSISTENCE
+═══════════════════════════════════════════════════════════════ */
+function saveState(){
+  try{localStorage.setItem('mn_state', JSON.stringify({
+    user: state.user, theme: state.theme,
+    collection: state.collection, wishlist: state.wishlist,
+    messages: state.messages, trades: state.trades
+  }));}catch(e){}
+}
+function loadState(){
+  try{
+    const s = JSON.parse(localStorage.getItem('mn_state')||'null');
+    if(s){ Object.assign(state, s); }
+  }catch(e){}
+}
+
+/* ════════════════════════════════════════════════════════════
+   THEME
+═══════════════════════════════════════════════════════════════ */
+const THEMES = [
+  {t:'dark',  label:'Dark (Default)'},
+  {t:'dawn',  label:'Dawn'},
+  {t:'slate', label:'Slate Blue'},
+  {t:'forest',label:'Forest'},
+  {t:'rose',  label:'Rose'},
+  {t:'ink',   label:'Ink'},
+];
+function applyTheme(t){
+  state.theme = t;
+  document.documentElement.setAttribute('data-theme', t === 'dark' ? '' : t);
+  document.querySelectorAll('.theme-dot').forEach(d=>d.classList.toggle('active', d.dataset.t===t));
+  saveState();
+}
+function buildThemePickers(){
+  ['theme-picker','settings-theme-picker'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(!el) return;
+    el.innerHTML = THEMES.map(({t,label})=>
+      `<div class="theme-dot${state.theme===t?' active':''}" data-t="${t}" title="${label}" onclick="applyTheme('${t}')"></div>`
+    ).join('');
+  });
+}
+let themeOpen = false;
+function toggleThemePicker(){
+  themeOpen = !themeOpen;
+  document.getElementById('theme-picker').style.display = themeOpen ? 'flex':'none';
+}
+
+/* ════════════════════════════════════════════════════════════
+   NAVIGATION
+═══════════════════════════════════════════════════════════════ */
+const PAGES = ['home','login','signup','collection','discover','trade','profile'];
+function navigate(page){
+  PAGES.forEach(p=>{
+    document.getElementById('page-'+p).classList.toggle('active', p===page);
+    const nb = document.getElementById('nb-'+p);
+    if(nb) nb.classList.toggle('active', p===page);
+  });
+  if(page==='collection') renderCollection();
+  if(page==='discover') renderDiscover();
+  if(page==='trade') renderTrade();
+  if(page==='profile') renderProfile();
+  themeOpen=false;
+  document.getElementById('theme-picker').style.display='none';
+  window.scrollTo(0,0);
+}
+
+/* ════════════════════════════════════════════════════════════
+   AUTH
+═══════════════════════════════════════════════════════════════ */
+const DEMO_USERS = [
+  {id:'u1',username:'jane_collects',email:'jane@example.com',phone:'',firstName:'Jane',lastName:'Doe',password:'password',joined:'2024-03-10'},
+  {id:'u2',username:'vinyl_king',email:'vinyl@example.com',phone:'',firstName:'Marcus',lastName:'Hall',password:'password',joined:'2024-01-05'},
+];
+function getUsers(){
+  try{return JSON.parse(localStorage.getItem('mn_users')||JSON.stringify(DEMO_USERS));}catch(e){return DEMO_USERS;}
+}
+function saveUsers(users){
+  localStorage.setItem('mn_users', JSON.stringify(users));
+}
+function doLogin(){
+  const id = document.getElementById('login-id').value.trim();
+  const pw = document.getElementById('login-pw').value;
+  const users = getUsers();
+  const user = users.find(u=>u.email===id||u.username===id||u.phone===id);
+  if(!user||user.password!==pw){
+    document.getElementById('login-err').classList.add('show');
+    return;
+  }
+  document.getElementById('login-err').classList.remove('show');
+  loginUser(user);
+}
+function doSignup(){
+  const first=document.getElementById('su-first').value.trim();
+  const last=document.getElementById('su-last').value.trim();
+  const user=document.getElementById('su-user').value.trim();
+  const email=document.getElementById('su-email').value.trim();
+  const pw=document.getElementById('su-pw').value;
+  const err=document.getElementById('su-err');
+  if(!first||!last||!user||!email||!pw){err.textContent='Please fill all required fields.';err.classList.add('show');return;}
+  if(pw.length<8){err.textContent='Password must be at least 8 characters.';err.classList.add('show');return;}
+  const users=getUsers();
+  if(users.find(u=>u.email===email||u.username===user)){err.textContent='Email or username already exists.';err.classList.add('show');return;}
+  const newUser={id:'u'+Date.now(),username:user,email,phone:document.getElementById('su-phone').value.trim(),firstName:first,lastName:last,password:pw,joined:new Date().toISOString().split('T')[0]};
+  users.push(newUser);
+  saveUsers(users);
+  err.classList.remove('show');
+  loginUser(newUser);
+  toast('Account created! Welcome, '+first+'!','success');
+}
+function loginUser(user){
+  state.user=user;
+  updateNavForAuth();
+  navigate('collection');
+  saveState();
+}
+function logout(){
+  state.user=null;
+  updateNavForAuth();
+  navigate('home');
+  saveState();
+}
+function updateNavForAuth(){
+  const loggedIn = !!state.user;
+  document.getElementById('nav-login').style.display = loggedIn?'none':'';
+  document.getElementById('nav-user').style.display = loggedIn?'flex':'none';
+  document.getElementById('nav-add').style.display = loggedIn?'':'none';
+  document.getElementById('nb-collection').style.display = loggedIn?'':'none';
+  document.getElementById('nb-trade').style.display = loggedIn?'':'none';
+  if(loggedIn){
+    document.getElementById('nav-avatar').textContent = state.user.firstName[0];
+  }
+}
+
+/* ════════════════════════════════════════════════════════════
+   MEDIA TYPE GRIDS (HOME + ADD MODAL)
+═══════════════════════════════════════════════════════════════ */
+function buildMediaGrids(){
+  const homeGrid = document.getElementById('home-media-grid');
+  homeGrid.innerHTML = MEDIA_TYPES.map(m=>
+    `<div class="media-card">
+      <div class="media-icon">${m.icon}</div>
+      <div class="media-label">${m.label}</div>
+     </div>`).join('');
+
+  const addGrid = document.getElementById('add-media-grid');
+  addGrid.innerHTML = MEDIA_TYPES.map(m=>
+    `<div class="media-card" onclick="selectType('${m.id}')">
+      <div class="media-icon">${m.icon}</div>
+      <div class="media-label">${m.label}</div>
+     </div>`).join('');
+
+  // Populate type selects
+  ['col-filter-type','wish-type'].forEach(id=>{
+    const sel=document.getElementById(id);
+    if(!sel)return;
+    MEDIA_TYPES.forEach(m=>{
+      const opt=document.createElement('option');
+      opt.value=m.id; opt.textContent=m.label;
+      sel.appendChild(opt);
+    });
+  });
+}
+
+/* ════════════════════════════════════════════════════════════
+   ADD ITEM MODAL
+═══════════════════════════════════════════════════════════════ */
+function openAddModal(){
+  if(!state.user){navigate('login');return;}
+  document.getElementById('add-step-1').style.display='';
+  document.getElementById('add-step-2').style.display='none';
+  document.getElementById('add-footer').style.display='none';
+  document.getElementById('scan-result').style.display='none';
+  document.getElementById('scan-preview-img').style.display='none';
+  document.getElementById('barcode-manual').value='';
+  state.selectedType=null;
+  state.editingItem={};
+  openModal('modal-add');
+}
+function selectType(id){
+  state.selectedType = MEDIA_TYPES.find(m=>m.id===id);
+  document.getElementById('add-step-1').style.display='none';
+  document.getElementById('add-step-2').style.display='';
+  document.getElementById('add-footer').style.display='flex';
+  // Switch to manual tab by default to show fields
+  switchTab('manual-tab','add');
+  buildManualForm();
+  // select in grid
+  document.querySelectorAll('#add-media-grid .media-card').forEach(c=>c.classList.remove('selected'));
+}
+function backToStep1(){
+  document.getElementById('add-step-1').style.display='';
+  document.getElementById('add-step-2').style.display='none';
+  document.getElementById('add-footer').style.display='none';
+}
+function buildManualForm(){
+  const mt = state.selectedType;
+  if(!mt) return;
+  const wrap = document.getElementById('manual-form-fields');
+  wrap.innerHTML='';
+
+  // Cover image upload
+  wrap.innerHTML+=`
+    <div class="form-group">
+      <label class="form-label">Cover image (optional)</label>
+      <div style="display:flex;gap:10px;align-items:center">
+        <div id="cover-preview" style="width:48px;height:64px;background:var(--bg3);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:22px;overflow:hidden;border:1px solid var(--border)">${mt.icon}</div>
+        <button class="btn-ghost" onclick="document.getElementById('cover-file').click()" type="button">Upload cover</button>
+        <input type="file" id="cover-file" accept="image/*" style="display:none" onchange="previewCover(event)">
       </div>
     </div>`;
-  document.getElementById('no-result').style.display = 'none';
-}
 
-function displayNotFound(barcode) {
-  document.getElementById('result-display').innerHTML = `
-    <div class="error-state result-in">
-      ⚠ NO RECORD FOUND<br>
-      <span style="opacity:0.6; font-size:0.65rem; display:block; margin-top:0.5rem;">Barcode: ${barcode}</span>
-      <span style="opacity:0.5; font-size:0.62rem; display:block; margin-top:0.3rem;">
-        Try manual entry or verify the barcode format (ISBN-13, EAN-13, UPC-A)
-      </span>
-    </div>`;
-}
+  const fields = mt.fields;
 
-function clearResults() {
-  document.getElementById('no-result').style.display = 'flex';
-  document.getElementById('result-display').style.display = 'none';
-  document.getElementById('result-display').innerHTML = '';
-}
-
-// ── History ───────────────────────────────────────────────────────────
-
-const typeEmojis = { movie:'🎬', music:'🎵', book:'📖', game:'🎮', unknown:'📦' };
-
-function addToHistory(result, barcode) {
-  const entry = {
-    id: Date.now(),
-    type: result.type,
-    title: result.title,
-    subtitle: result.subtitle,
-    barcode: barcode,
-    year: result.year,
-    scannedAt: new Date().toLocaleString(),
-    fullResult: result,
-  };
-
-  scanHistory.unshift(entry);
-  if (scanHistory.length > 50) scanHistory.pop();
-  localStorage.setItem('mediascan_history', JSON.stringify(scanHistory));
-
-  stats.total++;
-  if (result.type === 'movie') stats.movies++;
-  else if (result.type === 'music') stats.music++;
-  else if (result.type === 'book') stats.books++;
-  else if (result.type === 'game') stats.games++;
-  localStorage.setItem('mediascan_stats', JSON.stringify(stats));
-
-  updateStats();
-  renderHistory();
-}
-
-function renderHistory() {
-  const list = document.getElementById('history-list');
-  const empty = document.getElementById('history-empty');
-
-  if (scanHistory.length === 0) {
-    empty.style.display = 'block';
-    list.querySelectorAll('.history-item').forEach(el => el.remove());
+  if(mt.isComic){
+    buildComicForm(wrap, fields);
     return;
   }
 
-  empty.style.display = 'none';
-  list.querySelectorAll('.history-item').forEach(el => el.remove());
-
-  scanHistory.forEach(entry => {
-    const div = document.createElement('div');
-    div.className = 'history-item';
-    div.innerHTML = `
-      <div class="history-type-icon">${typeEmojis[entry.type] || '📦'}</div>
-      <div class="history-info">
-        <div class="history-name">${escHtml(entry.title)}</div>
-        <div class="history-meta">${escHtml(entry.subtitle)} · ${entry.year || ''}</div>
-      </div>
-      <div style="text-align:right;">
-        <div class="history-barcode">${entry.barcode}</div>
-        <div style="font-size:0.58rem; color:var(--muted); margin-top:0.2rem; font-family:'Share Tech Mono',monospace;">${entry.scannedAt}</div>
-      </div>`;
-    div.onclick = () => displayResult(entry.fullResult, entry.barcode);
-    list.appendChild(div);
+  // Generic fields
+  const grid2=['title','author','artist','publisher','label','edition','isbn','catalog'];
+  const shown=[];
+  fields.forEach(f=>{
+    if(shown.includes(f))return;
+    shown.push(f);
+    const label=FIELD_LABELS[f]||f;
+    if(f==='condition'){
+      wrap.innerHTML+=`<div class="form-group"><label class="form-label">${label}</label>
+        <select class="form-select" data-field="${f}">${CONDITION_OPTIONS.map(o=>`<option>${o}</option>`).join('')}</select></div>`;
+    } else if(f==='binding'){
+      wrap.innerHTML+=`<div class="form-group"><label class="form-label">${label}</label>
+        <select class="form-select" data-field="${f}">${BINDING_OPTIONS.map(o=>`<option>${o}</option>`).join('')}</select></div>`;
+    } else if(f==='complete'||f==='newsstand'){
+      wrap.innerHTML+=`<div class="form-group"><label class="form-label">${label}</label>
+        <select class="form-select" data-field="${f}"><option>No</option><option>Yes</option></select></div>`;
+    } else if(f==='notes'){
+      wrap.innerHTML+=`<div class="form-group"><label class="form-label">${label}</label>
+        <textarea class="form-input" data-field="${f}" rows="2" style="resize:vertical" placeholder="Any additional notes…"></textarea></div>`;
+    } else {
+      wrap.innerHTML+=`<div class="form-group"><label class="form-label">${label}</label>
+        <input class="form-input" data-field="${f}" placeholder="${label}"></div>`;
+    }
   });
 }
+function buildComicForm(wrap, fields){
+  // Title & issue row
+  wrap.innerHTML+=`<div class="form-row">
+    <div class="form-group"><label class="form-label">Title</label><input class="form-input" data-field="title" placeholder="Amazing Spider-Man"></div>
+    <div class="form-group"><label class="form-label">Issue #</label><input class="form-input" data-field="issue" placeholder="#129"></div>
+  </div>`;
+  wrap.innerHTML+=`<div class="form-row">
+    <div class="form-group"><label class="form-label">Publisher</label><input class="form-input" data-field="publisher" placeholder="Marvel Comics"></div>
+    <div class="form-group"><label class="form-label">Publication Date</label><input class="form-input" data-field="pub_date" placeholder="Feb 1974"></div>
+  </div>`;
+  wrap.innerHTML+=`<div class="form-row">
+    <div class="form-group"><label class="form-label">Writer</label><input class="form-input" data-field="writer" placeholder=""></div>
+    <div class="form-group"><label class="form-label">Cover Artist</label><input class="form-input" data-field="cover_artist" placeholder=""></div>
+  </div>`;
+  wrap.innerHTML+=`<div class="form-row">
+    <div class="form-group"><label class="form-label">Penciler</label><input class="form-input" data-field="penciler" placeholder=""></div>
+    <div class="form-group"><label class="form-label">Inker</label><input class="form-input" data-field="inker" placeholder=""></div>
+  </div>`;
 
-function clearHistory() {
-  if (confirm('Clear all scan history?')) {
-    scanHistory = [];
-    stats = { total:0, movies:0, music:0, books:0, games:0 };
-    localStorage.setItem('mediascan_history', '[]');
-    localStorage.setItem('mediascan_stats', JSON.stringify(stats));
-    renderHistory();
-    updateStats();
-    showToast('History cleared');
+  // Edition Type
+  wrap.innerHTML+=`<div class="form-group"><label class="form-label">Edition / Copy Type</label>
+    <div class="comic-tags-wrap" id="ctag-edition_type">${COMIC_SPECIAL.edition_type.map(v=>
+      `<div class="comic-tag" data-field="edition_type" data-val="${v}" onclick="toggleComicTag(this)">${v}</div>`
+    ).join('')}</div></div>`;
+
+  // Variant
+  wrap.innerHTML+=`<div class="form-group"><label class="form-label">Variant</label>
+    <div class="comic-tags-wrap" id="ctag-variant">${COMIC_SPECIAL.variant.map(v=>
+      `<div class="comic-tag" data-field="variant" data-val="${v}" onclick="toggleComicTag(this)">${v}</div>`
+    ).join('')}</div></div>`;
+
+  // Condition + Printing row
+  wrap.innerHTML+=`<div class="form-row">
+    <div class="form-group"><label class="form-label">Condition (raw)</label>
+      <select class="form-select" data-field="condition"><option value="">— Select —</option>${CONDITION_OPTIONS.map(o=>`<option>${o}</option>`).join('')}</select>
+    </div>
+    <div class="form-group"><label class="form-label">Printing #</label><input class="form-input" data-field="printing" placeholder="1st printing"></div>
+  </div>`;
+
+  // Grading
+  wrap.innerHTML+=`<div class="form-group"><label class="form-label">Professional Grade</label>
+    <div class="comic-tags-wrap" id="ctag-grade">${COMIC_SPECIAL.grade.slice(0,14).map(v=>
+      `<div class="comic-tag" data-field="grade" data-val="${v}" onclick="toggleComicTag(this,'grade')">${v}</div>`
+    ).join('')}<div class="comic-tag" onclick="this.parentElement.innerHTML+='${COMIC_SPECIAL.grade.slice(14).map(v=>`<div class=&quot;comic-tag&quot; data-field=&quot;grade&quot; data-val=&quot;${v}&quot; onclick=&quot;toggleComicTag(this,&apos;grade&apos;)&quot;>${v}</div>`).join('')}';this.remove()">… more</div></div></div>`;
+
+  wrap.innerHTML+=`<div class="form-row">
+    <div class="form-group"><label class="form-label">Graded By</label>
+      <select class="form-select" data-field="grader"><option value="">Not graded</option>${COMIC_SPECIAL.grader.map(o=>`<option>${o}</option>`).join('')}</select>
+    </div>
+    <div class="form-group"><label class="form-label">Newsstand Copy?</label>
+      <select class="form-select" data-field="newsstand"><option>No</option><option>Yes</option></select>
+    </div>
+  </div>`;
+  wrap.innerHTML+=`<div class="form-row">
+    <div class="form-group"><label class="form-label">Signed?</label>
+      <select class="form-select" data-field="signed"><option>No</option><option>Yes</option></select>
+    </div>
+    <div class="form-group"><label class="form-label">Stamp / Sticker</label>
+      <input class="form-input" data-field="stamp" placeholder="Convention stamp, price sticker…">
+    </div>
+  </div>`;
+  wrap.innerHTML+=`<div class="form-group"><label class="form-label">Notes</label>
+    <textarea class="form-input" data-field="notes" rows="2" style="resize:vertical" placeholder="Any other details…"></textarea></div>`;
+}
+const comicTagSelected = {};
+function toggleComicTag(el, group){
+  const field = el.dataset.field;
+  const val = el.dataset.val;
+  const isGrade = field==='grade';
+  if(isGrade){
+    // Only one grade
+    document.querySelectorAll('[data-field="grade"]').forEach(t=>t.classList.remove('active'));
+    el.classList.add('active');
+    comicTagSelected[field]=val;
+  } else {
+    el.classList.toggle('active');
+    if(!comicTagSelected[field]) comicTagSelected[field]=[];
+    const arr = comicTagSelected[field];
+    const idx = arr.indexOf(val);
+    if(idx>-1) arr.splice(idx,1); else arr.push(val);
   }
 }
 
-function updateStats() {
-  document.getElementById('stat-total').textContent = stats.total;
-  document.getElementById('stat-movies').textContent = stats.movies;
-  document.getElementById('stat-music').textContent = stats.music;
-  document.getElementById('stat-books').textContent = stats.books;
-  document.getElementById('stat-games').textContent = stats.games;
+/* ── SCAN ── */
+function handleScanFile(e){
+  const file=e.target.files[0]; if(!file)return;
+  const reader=new FileReader();
+  reader.onload=ev=>{
+    const img=document.getElementById('scan-preview-img');
+    img.src=ev.target.result; img.style.display='';
+    // Simulate detection
+    setTimeout(()=>simulateScanResult(ev.target.result),600);
+  };
+  reader.readAsDataURL(file);
+  state.editingItem._coverData = null; // will set after
+}
+function simulateScanResult(dataUrl){
+  // In a real app: call a barcode API or ML service
+  const fakeResults = [
+    {title:'The Amazing Spider-Man #129',type:'comic',publisher:'Marvel Comics',year:'1974'},
+    {title:'Kind of Blue',type:'vinyl',artist:'Miles Davis',label:'Columbia',year:'1959'},
+    {title:'The Hobbit',type:'book',author:'J.R.R. Tolkien',publisher:'George Allen & Unwin',year:'1937'},
+    {title:'Super Mario Bros.',type:'game',platform:'NES',publisher:'Nintendo',year:'1985'},
+  ];
+  const r = fakeResults[Math.floor(Math.random()*fakeResults.length)];
+  const el=document.getElementById('scan-result');
+  el.style.display='';
+  document.getElementById('scan-result-info').innerHTML=
+    `<strong>${r.title}</strong> &nbsp; <span class="badge badge-muted">${r.type}</span><br>
+     ${r.artist||r.author||''}${r.artist||r.author?' · ':''}${r.label||r.publisher||''} ${r.year||''}`;
+  state.editingItem._prefill=r;
+  // Auto-select type if found
+  const mt=MEDIA_TYPES.find(m=>m.id===r.type);
+  if(mt){ state.selectedType=mt; buildManualForm(); switchTab('manual-tab','add');
+    setTimeout(()=>prefillForm(r),100); }
+  toast('Item detected! Review details below.','success');
+}
+function prefillForm(r){
+  ['title','artist','author','album','publisher','label','year','platform'].forEach(f=>{
+    const inp=document.querySelector(`[data-field="${f}"]`);
+    if(inp&&r[f]) inp.value=r[f];
+  });
+}
+function lookupBarcode(){
+  const v=document.getElementById('barcode-manual').value.trim();
+  if(!v){toast('Enter a barcode or ISBN','error');return;}
+  // Simulate lookup
+  toast('Looking up '+v+'…');
+  setTimeout(()=>{
+    simulateScanResult(null);
+    document.getElementById('scan-result').style.display='';
+  },800);
+}
+function previewCover(e){
+  const file=e.target.files[0]; if(!file)return;
+  const reader=new FileReader();
+  reader.onload=ev=>{
+    const el=document.getElementById('cover-preview');
+    el.innerHTML=`<img src="${ev.target.result}" style="width:100%;height:100%;object-fit:cover">`;
+    state.editingItem._coverData=ev.target.result;
+  };
+  reader.readAsDataURL(file);
 }
 
-// ── Utilities ─────────────────────────────────────────────────────────
-
-function escHtml(str) {
-  return (str || '').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+/* ── SAVE ITEM ── */
+function saveItem(){
+  if(!state.selectedType){toast('Please select a media type','error');return;}
+  const item={
+    id:'i'+Date.now(),
+    type: state.selectedType.id,
+    typeLabel: state.selectedType.label,
+    icon: state.selectedType.icon,
+    dateAdded: new Date().toISOString(),
+    coverData: state.editingItem._coverData||null,
+    fields:{},
+    comicTags: JSON.parse(JSON.stringify(comicTagSelected)),
+  };
+  // Collect all field inputs
+  document.querySelectorAll('[data-field]').forEach(el=>{
+    if(el.dataset.field) item.fields[el.dataset.field]=el.value||el.textContent||'';
+  });
+  // Comic active tags
+  Object.keys(comicTagSelected).forEach(k=>{
+    item.fields[k]=Array.isArray(comicTagSelected[k])?comicTagSelected[k].join(', '):comicTagSelected[k];
+  });
+  state.collection.unshift(item);
+  saveState();
+  closeModal('modal-add');
+  renderCollection();
+  toast('Added to your collection!','success');
+  // Reset comic tags
+  Object.keys(comicTagSelected).forEach(k=>delete comicTagSelected[k]);
 }
 
-let toastTimer;
-function showToast(msg, type = '') {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.className = 'toast show' + (type ? ' ' + type : '');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.classList.remove('show'); }, 3000);
+/* ════════════════════════════════════════════════════════════
+   COLLECTION RENDER
+═══════════════════════════════════════════════════════════════ */
+function setView(v){
+  state.view=v;
+  document.getElementById('vt-grid').classList.toggle('active',v==='grid');
+  document.getElementById('vt-list').classList.toggle('active',v==='list');
+  document.getElementById('col-grid').style.display = v==='grid'?'':'none';
+  document.getElementById('col-list').style.display = v==='list'?'':'none';
 }
+function renderCollection(){
+  if(!state.user) return;
+  const search=(document.getElementById('col-search')||{value:''}).value.toLowerCase();
+  const typeF=(document.getElementById('col-filter-type')||{value:''}).value;
+  const sortV=(document.getElementById('col-sort')||{value:'date-added'}).value;
+
+  let items=[...state.collection];
+  if(search) items=items.filter(i=>{
+    const f=i.fields;
+    return (f.title||f.album||f.artist||f.author||'').toLowerCase().includes(search)||
+           (i.typeLabel||'').toLowerCase().includes(search);
+  });
+  if(typeF) items=items.filter(i=>i.type===typeF);
+  // Sort
+  items.sort((a,b)=>{
+    const fa=a.fields, fb=b.fields;
+    switch(sortV){
+      case 'title': return (fa.title||fa.album||fa.artist||'').localeCompare(fb.title||fb.album||fb.artist||'');
+      case 'author': return (fa.author||fa.artist||fa.writer||'').localeCompare(fb.author||fb.artist||fb.writer||'');
+      case 'pub-date': return (fa.pub_date||fa.year||fa.pub_year||'0').localeCompare(fb.pub_date||fb.year||fb.pub_year||'0');
+      case 'condition': return (fa.condition||'').localeCompare(fb.condition||'');
+      case 'type': return a.typeLabel.localeCompare(b.typeLabel);
+      default: return new Date(b.dateAdded)-new Date(a.dateAdded);
+    }
+  });
+
+  const grid=document.getElementById('col-grid');
+  const list=document.getElementById('col-list');
+  const empty=document.getElementById('col-empty');
+
+  if(items.length===0){
+    grid.innerHTML=''; list.innerHTML='';
+    empty.style.display='';
+    return;
+  }
+  empty.style.display='none';
+
+  // Grid
+  grid.innerHTML=items.map(i=>colItemHtml(i)).join('');
+  grid.querySelectorAll('.col-item').forEach(el=>
+    el.addEventListener('click',()=>openDetail(el.dataset.id)));
+
+  // List
+  list.innerHTML=items.map(i=>colListHtml(i)).join('');
+  list.querySelectorAll('.col-list-item').forEach(el=>
+    el.addEventListener('click',()=>openDetail(el.dataset.id)));
+}
+function colItemHtml(i){
+  const title=i.fields.title||i.fields.album||i.fields.artist||'Untitled';
+  const sub=i.fields.author||i.fields.artist||i.fields.writer||i.fields.year||'';
+  const cover=i.coverData?`<img src="${i.coverData}" alt="${title}">`:'';
+  return `<div class="col-item fade-in" data-id="${i.id}">
+    <div class="col-thumb">${cover||i.icon}
+      <div class="col-badge">${i.typeLabel}</div>
+    </div>
+    <div class="col-info">
+      <div class="col-title truncate">${title}</div>
+      <div class="col-meta truncate">${sub}</div>
+    </div>
+  </div>`;
+}
+function colListHtml(i){
+  const title=i.fields.title||i.fields.album||i.fields.artist||'Untitled';
+  const sub=i.fields.author||i.fields.artist||i.fields.writer||'';
+  const yr=i.fields.year||i.fields.pub_year||i.fields.pub_date||'';
+  const cover=i.coverData?`<img src="${i.coverData}" alt="${title}">`:'';
+  return `<div class="col-list-item" data-id="${i.id}">
+    <div class="col-list-thumb">${cover||i.icon}</div>
+    <div style="flex:1;min-width:0">
+      <div class="fw-500 truncate">${title}</div>
+      <div class="text-sm text-muted truncate">${sub}${sub&&yr?' · ':''}${yr}</div>
+    </div>
+    <div class="badge badge-muted">${i.typeLabel}</div>
+    ${i.fields.condition?`<div class="text-xs text-muted">${i.fields.condition}</div>`:''}
+  </div>`;
+}
+
+/* ════════════════════════════════════════════════════════════
+   ITEM DETAIL
+═══════════════════════════════════════════════════════════════ */
+function openDetail(id){
+  const item=state.collection.find(i=>i.id===id);
+  if(!item) return;
+  state.detailItem=item;
+  const title=item.fields.title||item.fields.album||item.fields.artist||'Untitled';
+  document.getElementById('detail-title').textContent=title;
+  const coverEl=document.getElementById('detail-cover');
+  if(item.coverData){ coverEl.innerHTML=`<img src="${item.coverData}" alt="${title}" style="width:100%;height:100%;object-fit:cover;border-radius:10px">`; }
+  else { coverEl.innerHTML=item.icon; coverEl.style.fontSize='56px'; }
+
+  // Meta table
+  const meta=document.getElementById('detail-meta');
+  const skip=['notes','_coverData'];
+  meta.innerHTML=`<tr><td>Type</td><td>${item.typeLabel}</td></tr>`+
+    Object.entries(item.fields).filter(([k,v])=>v&&!skip.includes(k)).map(([k,v])=>
+      `<tr><td>${FIELD_LABELS[k]||k}</td><td>${v}</td></tr>`
+    ).join('');
+
+  // Extra (notes)
+  const notes=item.fields.notes;
+  document.getElementById('detail-extra').innerHTML=notes?
+    `<div style="font-size:12px;color:var(--text2);padding:12px;background:var(--bg3);border-radius:8px">${notes}</div>`:'';
+
+  openModal('modal-detail');
+}
+function deleteItem(){
+  if(!state.detailItem) return;
+  state.collection=state.collection.filter(i=>i.id!==state.detailItem.id);
+  saveState();
+  closeModal('modal-detail');
+  renderCollection();
+  toast('Item removed','success');
+}
+function openTrade(){
+  closeModal('modal-detail');
+  openModal('modal-trade');
+}
+
+/* ════════════════════════════════════════════════════════════
+   DISCOVER
+═══════════════════════════════════════════════════════════════ */
+const DEMO_COLLECTION=[
+  {id:'d1',type:'comic',typeLabel:'Comic Book',icon:'🦸',fields:{title:'Amazing Spider-Man #129',publisher:'Marvel',pub_date:'Feb 1974',condition:'Very Fine',writer:'Gerry Conway',edition_type:'Newsstand'},coverData:null},
+  {id:'d2',type:'vinyl',typeLabel:'Vinyl',icon:'🎵',fields:{album:'Kind of Blue',artist:'Miles Davis',label:'Columbia',year:'1959',condition:'Near Mint',pressing:'US Original'},coverData:null},
+  {id:'d3',type:'book',typeLabel:'Book',icon:'📗',fields:{title:'Dune',author:'Frank Herbert',publisher:'Chilton Books',pub_year:'1965',condition:'Good',binding:'Hardcover'},coverData:null},
+  {id:'d4',type:'game',typeLabel:'Video Game',icon:'🎮',fields:{title:'The Legend of Zelda',platform:'NES',publisher:'Nintendo',year:'1987',condition:'Very Good',complete:'Yes'},coverData:null},
+  {id:'d5',type:'magazine',typeLabel:'Magazine',icon:'📖',fields:{title:'Rolling Stone',issue:'#1',pub_date:'Nov 1967',publisher:'Straight Arrow',condition:'Fair'},coverData:null},
+  {id:'d6',type:'comic',typeLabel:'Comic Book',icon:'🦸',fields:{title:'X-Men #1',publisher:'Marvel',pub_date:'Sep 1963',condition:'Good',writer:'Stan Lee',edition_type:'Direct Edition'},coverData:null},
+];
+function renderDiscover(){
+  const grid=document.getElementById('discover-grid');
+  const all=[...DEMO_COLLECTION,...state.collection.slice(0,6)];
+  grid.innerHTML=all.map(i=>{
+    const title=i.fields.title||i.fields.album||i.fields.artist||'Item';
+    const sub=i.fields.author||i.fields.artist||i.fields.writer||i.fields.year||'';
+    return `<div class="col-item fade-in">
+      <div class="col-thumb">${i.coverData?`<img src="${i.coverData}">`:(i.icon||'📦')}
+        <div class="col-badge">${i.typeLabel}</div>
+      </div>
+      <div class="col-info">
+        <div class="col-title truncate">${title}</div>
+        <div class="col-meta truncate">${sub}</div>
+        <div class="col-meta" style="margin-top:4px;color:var(--accent);font-size:11px;font-family:var(--font-m)">@community_collector</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/* ════════════════════════════════════════════════════════════
+   TRADE / MESSAGES
+═══════════════════════════════════════════════════════════════ */
+function renderTrade(){
+  const cl=document.getElementById('convo-list');
+  if(state.messages.length===0){
+    cl.innerHTML=`<div style="text-align:center;padding:20px;color:var(--text3);font-size:12px">No conversations yet</div>`;
+  } else {
+    cl.innerHTML=state.messages.map((m,i)=>`
+      <div class="col-list-item" onclick="openConvo(${i})">
+        <div class="col-list-thumb" style="background:var(--accent);color:#000">📬</div>
+        <div style="flex:1;min-width:0">
+          <div class="fw-500 truncate text-sm">${m.to}</div>
+          <div class="text-xs text-muted truncate">${m.msgs[m.msgs.length-1].text}</div>
+        </div>
+      </div>`).join('');
+  }
+
+  // Traders grid
+  const tg=document.getElementById('traders-grid');
+  const FAKE_TRADERS=[
+    {name:'Marcus Hall',user:'vinyl_king',items:42,icon:'🎵'},
+    {name:'Sara Liu',user:'comix_sara',items:87,icon:'🦸'},
+    {name:'Tom B.',user:'retrogames',items:31,icon:'🎮'},
+    {name:'Priya N.',user:'bookstack',items:56,icon:'📗'},
+  ];
+  tg.innerHTML=FAKE_TRADERS.map(t=>`
+    <div class="card">
+      <div class="card-body flex items-center gap-3">
+        <div class="avatar" style="font-size:22px">${t.icon}</div>
+        <div style="flex:1">
+          <div class="fw-500">${t.name}</div>
+          <div class="text-muted text-xs mono">@${t.user}</div>
+          <div class="text-xs" style="margin-top:4px">${t.items} items in collection</div>
+        </div>
+        <button class="btn-ghost" style="font-size:12px" onclick="startMessage('${t.user}')">Message</button>
+      </div>
+    </div>`).join('');
+
+  renderWishlist();
+}
+function openConvo(idx){
+  const m=state.messages[idx];
+  const panel=document.getElementById('chat-panel');
+  panel.innerHTML=`
+    <div style="font-weight:600;font-size:13px;padding-bottom:10px;border-bottom:1px solid var(--border)">
+      💬 ${m.to}
+    </div>
+    <div class="flex-col gap-2" style="flex:1;overflow-y:auto;padding:8px 0" id="chat-msgs">
+      ${m.msgs.map(msg=>`
+        <div style="display:flex;flex-direction:column;align-items:${msg.from==='me'?'flex-end':'flex-start'}">
+          <div class="msg-bubble ${msg.from==='me'?'me':'them'}">${msg.text}</div>
+          <div class="msg-time">${msg.time}</div>
+        </div>`).join('')}
+    </div>
+    <div style="display:flex;gap:8px;border-top:1px solid var(--border);padding-top:10px">
+      <input class="form-input" id="chat-input" placeholder="Type a message…" style="flex:1" onkeydown="if(event.key==='Enter')sendChatMsg(${idx})">
+      <button class="btn-primary" onclick="sendChatMsg(${idx})">Send</button>
+    </div>`;
+}
+function sendChatMsg(idx){
+  const inp=document.getElementById('chat-input');
+  const text=inp.value.trim(); if(!text)return;
+  state.messages[idx].msgs.push({from:'me',text,time:new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})});
+  saveState();
+  openConvo(idx);
+  inp.value='';
+}
+function sendTradeMessage(){
+  const to=document.getElementById('trade-to').value.trim();
+  const text=document.getElementById('trade-msg').value.trim();
+  if(!to||!text){toast('Please fill in all fields','error');return;}
+  const existing=state.messages.find(m=>m.to===to);
+  const msg={from:'me',text,time:new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})};
+  if(existing){ existing.msgs.push(msg); }
+  else { state.messages.push({to,msgs:[msg]}); }
+  saveState();
+  state.trades++;
+  closeModal('modal-trade');
+  toast('Message sent to '+to,'success');
+}
+function startMessage(user){
+  document.getElementById('trade-to').value=user;
+  document.getElementById('trade-msg').value='';
+  openModal('modal-trade');
+}
+function addWish(){
+  const text=document.getElementById('wish-input').value.trim();
+  const type=document.getElementById('wish-type').value;
+  if(!text){toast('Enter an item','error');return;}
+  state.wishlist.push({id:'w'+Date.now(),text,type,date:new Date().toLocaleDateString()});
+  document.getElementById('wish-input').value='';
+  saveState();
+  renderWishlist();
+}
+function renderWishlist(){
+  const el=document.getElementById('wishlist-items');
+  if(!el) return;
+  if(state.wishlist.length===0){
+    el.innerHTML=`<div style="text-align:center;padding:30px;color:var(--text3)">Your wishlist is empty</div>`;
+    return;
+  }
+  el.innerHTML=state.wishlist.map(w=>`
+    <div class="col-list-item">
+      <div class="col-list-thumb">✨</div>
+      <div style="flex:1">
+        <div class="fw-500">${w.text}</div>
+        <div class="text-xs text-muted">${w.type?`${MEDIA_TYPES.find(m=>m.id===w.type)?.label||w.type} · `:''} Added ${w.date}</div>
+      </div>
+      <button class="btn-ghost" style="font-size:11px;color:var(--danger)" onclick="removeWish('${w.id}')">Remove</button>
+    </div>`).join('');
+}
+function removeWish(id){
+  state.wishlist=state.wishlist.filter(w=>w.id!==id);
+  saveState(); renderWishlist();
+}
+
+/* ════════════════════════════════════════════════════════════
+   PROFILE
+═══════════════════════════════════════════════════════════════ */
+function renderProfile(){
+  if(!state.user) return;
+  const u=state.user;
+  document.getElementById('prof-avatar').textContent=u.firstName[0];
+  document.getElementById('prof-name').textContent=u.firstName+' '+u.lastName;
+  document.getElementById('prof-username').textContent='@'+u.username;
+  document.getElementById('prof-member').textContent='Member since '+u.joined;
+  const types=new Set(state.collection.map(i=>i.type));
+  document.getElementById('pstat-items').textContent=state.collection.length;
+  document.getElementById('pstat-types').textContent=types.size;
+  document.getElementById('pstat-trades').textContent=state.trades;
+  document.getElementById('pstat-wish').textContent=state.wishlist.length;
+  // Settings prefill
+  document.getElementById('set-name').value=u.firstName+' '+u.lastName;
+  document.getElementById('set-email').value=u.email;
+  // Mini collection
+  const pg=document.getElementById('prof-col-grid');
+  pg.innerHTML=state.collection.slice(0,8).map(i=>{
+    const title=i.fields.title||i.fields.album||i.fields.artist||'Item';
+    return `<div class="col-item">
+      <div class="col-thumb">${i.coverData?`<img src="${i.coverData}">`:(i.icon||'📦')}
+        <div class="col-badge">${i.typeLabel}</div>
+      </div>
+      <div class="col-info"><div class="col-title truncate">${title}</div></div>
+    </div>`;
+  }).join('');
+  buildThemePickers();
+}
+function saveSettings(){
+  const name=document.getElementById('set-name').value.trim().split(' ');
+  if(state.user){
+    state.user.firstName=name[0]||state.user.firstName;
+    state.user.lastName=name.slice(1).join(' ')||state.user.lastName;
+    state.user.email=document.getElementById('set-email').value.trim();
+    document.getElementById('nav-avatar').textContent=state.user.firstName[0];
+  }
+  saveState();
+  toast('Settings saved','success');
+}
+function openProfileEdit(){navigate('profile');}
+
+/* ════════════════════════════════════════════════════════════
+   MODAL HELPERS
+═══════════════════════════════════════════════════════════════ */
+function openModal(id){document.getElementById(id).classList.add('open');}
+function closeModal(id){document.getElementById(id).classList.remove('open');}
+// Close on overlay click
+document.querySelectorAll('.modal-overlay').forEach(o=>{
+  o.addEventListener('click',e=>{if(e.target===o)closeModal(o.id);});
+});
+
+/* ── TABS ── */
+function switchTab(tabId, scope){
+  const parent = scope==='add'?document.getElementById('add-step-2'):
+                 scope==='trade'?document.getElementById('page-trade'):
+                 scope==='profile'?document.getElementById('page-profile'):document;
+  parent.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
+  parent.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  const content=document.getElementById('tab-'+tabId);
+  if(content) content.classList.add('active');
+  const btns=parent.querySelectorAll('.tab-btn');
+  btns.forEach(b=>{if(b.getAttribute('onclick')&&b.getAttribute('onclick').includes(`'${tabId}'`))b.classList.add('active');});
+}
+
+/* ── TOAST ── */
+function toast(msg, type=''){
+  const el=document.createElement('div');
+  el.className='toast-msg '+(type||'');
+  el.innerHTML=(type==='success'?'✓ ':type==='error'?'✕ ':'')+msg;
+  document.getElementById('toast').appendChild(el);
+  setTimeout(()=>el.remove(), 3200);
+}
+
+/* ════════════════════════════════════════════════════════════
+   INIT
+═══════════════════════════════════════════════════════════════ */
+function init(){
+  loadState();
+  applyTheme(state.theme||'dark');
+  buildThemePickers();
+  buildMediaGrids();
+  updateNavForAuth();
+  if(state.user){ navigate('collection'); }
+  else { navigate('home'); }
+}
+init();
 </script>
 </body>
 </html>
