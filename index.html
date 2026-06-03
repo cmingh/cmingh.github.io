@@ -30,14 +30,7 @@
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
   /* ── PASTE YOUR FIREBASE CONFIG HERE ── */
-  const FIREBASE_CONFIG = {
-    apiKey:            "AIzaSyCjKwNRpLgTzUgtacwq5V1x_UmhSDKCIL0",
-    authDomain:        "client-project-408df.firebaseapp.com",
-    projectId:         "client-project-408df",
-    storageBucket:     "client-project-408df.firebasestorage.app",
-    messagingSenderId: "145345076894",
-    appId:             "1:145345076894:web:81c5c2bd08bfe1a02ae58f"
-  };
+  import { FIREBASE_CONFIG } from "./firebase-config.js";
 
   /* ── Check if config looks real (not placeholder) ── */
   const FIREBASE_ENABLED = FIREBASE_CONFIG.apiKey !== "YOUR_API_KEY";
