@@ -286,19 +286,27 @@ async function _extractTextFromCoverImage(dataUrl) {
 
     showCoverScanStatus('loading', '<span class="spin">⏳</span> Running OCR… (this may take a moment)');
 
-    // FIX: Tesseract.js v4 API — createWorker(lang, oem, options)
-    // OEM 1 = LSTM_ONLY (most accurate for printed text)
-    const worker = await Tesseract.createWorker('eng', 1, {
-      logger: m => {
-        if (m.status === 'recognizing text') {
-          const pct = Math.round((m.progress || 0) * 100);
-          showCoverScanStatus('loading', `<span class="spin">⏳</span> Recognizing text… ${pct}%`);
-        }
-      },
-    });
+    let worker;
+    let text = '';
+    try {
+      worker = await Tesseract.createWorker({
+        logger: m => {
+          if (m.status === 'recognizing text') {
+            const pct = Math.round((m.progress || 0) * 100);
+            showCoverScanStatus('loading', `<span class="spin">⏳</span> Recognizing text… ${pct}%`);
+          }
+        },
+      });
 
-    const { data: { text } } = await worker.recognize(dataUrl);
-    await worker.terminate();
+      await worker.load();
+      await worker.loadLanguage('eng');
+      await worker.initialize('eng');
+
+      const result = await worker.recognize(dataUrl);
+      text = result.data?.text || '';
+    } finally {
+      if (worker) await worker.terminate();
+    }
 
     // Keep lines that look like real words (not pure numbers/punctuation)
     const lines = text
