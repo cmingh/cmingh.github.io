@@ -195,11 +195,12 @@ async function _runZXingOnDataUrl(dataUrl) {
       const result = codeReader.decodeFromCanvas(canvas);
       code = result.getText();
     } catch (_canvasErr) {
-      // FIX: The old fallback passed `decodeFromImage(undefined, dataUrl)` which is
-      // wrong — the first arg must be an HTMLImageElement, second arg is optional hints.
-      // Correct usage: pass the already-loaded image element directly.
+      const hints = new Map();
+      if (window.ZXing?.DecodeHintType) {
+        hints.set(window.ZXing.DecodeHintType.TRY_HARDER, true);
+      }
       try {
-        const result = await codeReader.decodeFromImage(image);
+        const result = await codeReader.decodeFromImage(image, hints);
         code = result.getText();
       } catch (_imgErr) {
         // Both paths failed — no barcode detected in this image.
@@ -276,8 +277,8 @@ async function _extractTextFromCoverImage(dataUrl) {
         // FIX: pin to a stable Tesseract.js v4 CDN URL.
         // v5 changed the createWorker() signature — the OEM integer
         // second argument was removed and options moved to a single object.
-        // v4 keeps the stable (lang, oem, options) signature used below.
-        s.src     = 'https://unpkg.com/tesseract.js@4/dist/tesseract.min.js';
+        // v4 still works with the current worker lifecycle below.
+        s.src     = 'https://unpkg.com/tesseract.js@4.0.2/dist/tesseract.min.js';
         s.onload  = res;
         s.onerror = rej;
         document.head.appendChild(s);
@@ -289,8 +290,9 @@ async function _extractTextFromCoverImage(dataUrl) {
     let worker;
     let text = '';
     try {
-      worker = await Tesseract.createWorker({
-        logger: m => {
+      worker = await Tesseract.createWorker({        workerPath: 'https://unpkg.com/tesseract.js@4.0.2/dist/worker.min.js',
+        corePath:   'https://unpkg.com/tesseract.js@4.0.2/dist/tesseract-core.wasm.js',
+        langPath:   'https://unpkg.com/tesseract.js@4.0.2/lang',        logger: m => {
           if (m.status === 'recognizing text') {
             const pct = Math.round((m.progress || 0) * 100);
             showCoverScanStatus('loading', `<span class="spin">⏳</span> Recognizing text… ${pct}%`);
