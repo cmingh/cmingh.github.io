@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MediaNest</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body class="dark"> <nav id="main-nav">
+        <div class="logo" onclick="setView('home')">MediaNest</div>
+        <div id="nav-auth-links">
+            <button onclick="setView('login')" class="auth-guest">Login</button>
+            <button onclick="setView('signup')" class="auth-guest">Sign Up</button>
+            <button onclick="setView('collection')" class="auth-user" style="display:none;">My Collection</button>
+            <button onclick="logout()" class="auth-user" style="display:none;">Logout</button>
+        </div>
+        <button onclick="toggleThemePicker()">🎨 Themes</button>
+    </nav>
+
+    <div id="theme-picker-container" style="display: none;"></div>
+
+    <main id="main-content">
+        
+        <section id="view-home" class="view-panel">
+            <h2>Welcome to MediaNest</h2>
+            <p>Track your books, movies, and media seamlessly.</p>
+            <button onclick="setView('login')">Get Started</button>
+        </section>
+
+        <section id="view-login" class="view-panel" style="display: none;">
+            <h3>Login</h3>
+            <input type="email" id="login-email" placeholder="Email">
+            <input type="password" id="login-password" placeholder="Password">
+            <button onclick="doLogin()">Submit Login</button>
+        </section>
+
+        <section id="view-signup" class="view-panel" style="display: none;">
+            <h3>Sign Up</h3>
+            <input type="email" id="signup-email" placeholder="Email">
+            <input type="password" id="signup-password" placeholder="Password">
+            <button onclick="doSignup()">Create Account</button>
+        </section>
+
+        <section id="view-collection" class="view-panel" style="display: none;">
+            <h2>My Collection</h2>
+            
+            <div class="search-tools">
+                <input type="text" id="barcode-manual" placeholder="Enter barcode / ISBN...">
+                <button onclick="lookupBarcode()">Lookup Barcode</button>
+                
+                <input type="text" id="title-search" placeholder="Or search by title...">
+                <button onclick="searchBookByTitle()">Search Title</button>
+            </div>
+
+            <div class="scanner-box">
+                <button onclick="startCamera()">📷 Start Camera</button>
+                <button onclick="stopCamera()">Stop Camera</button>
+                <button onclick="captureFrame()">Scan Frame</button>
+                <video id="scanner-video" autoplay playsinline style="width:100%; max-width:400px; display:none;"></video>
+                
+                <div id="scan-dropzone" ondragover="event.preventDefault()" ondrop="handleScanDrop(event)">
+                    Drop barcode image here or 
+                    <input type="file" onchange="handleScanFile(event)">
+                </div>
+            </div>
+
+            <div id="scan-result" style="display: none;"></div>
+
+            <div id="media-grids"></div>
+        </section>
+    </main>
+
+    <div id="modal-detail" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div id="detail-body"></div>
+            <button onclick="openTrade()">Trade This Item</button>
+            <button onclick="saveItem()">Save Changes</button>
+            <button onclick="deleteItem()">Delete Item</button>
+            <button onclick="document.getElementById('modal-detail').style.display='none'">Close</button>
+        </div>
+    </div>
+
+    <div id="modal-trade" class="modal" style="display: none;">
+        <div class="modal-content">
+            <h3>Trade Item</h3>
+            <div id="trade-dropzone" ondragover="event.preventDefault()" ondrop="handleCoverScanDrop(event)">
+                Drop cover image here or
+                <input type="file" onchange="handleCoverScanFile(event)">
+            </div>
+            <button onclick="document.getElementById('modal-trade').style.display='none'">Cancel</button>
+        </div>
+    </div>
+
+    <script type="module" src="./main.js"></script>
+</body>
+</html>
