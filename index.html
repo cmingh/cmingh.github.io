@@ -308,7 +308,7 @@
 <div class="modal-overlay" id="modal-add">
   <div class="modal modal-lg">
     <div class="modal-header">
-      <div class="modal-title serif">Add to collection</div>
+      <div class="modal-title serif" id="add-modal-title">Add to collection</div>
       <button class="modal-close" onclick="window.closeModal('modal-add')">✕</button>
     </div>
     <div class="modal-body">
@@ -397,7 +397,7 @@
     </div>
     <div class="modal-footer" id="add-footer" style="display:none">
       <button class="btn-ghost" onclick="window.closeModal('modal-add')">Cancel</button>
-      <button class="btn-primary" onclick="window.saveItem()">Save to collection</button>
+      <button class="btn-primary" id="add-save-btn" onclick="window.saveItem()">Save to collection</button>
     </div>
   </div>
 </div>
@@ -414,6 +414,7 @@
         <div id="detail-cover-col">
           <div class="detail-cover" id="detail-cover">📦</div>
           <div class="flex-col gap-2" style="margin-top:12px">
+            <button class="btn-ghost w-full" style="font-size:12px" onclick="window.openEditItem(window._state.detailItem?.id)">✎ Edit</button>
             <button class="btn-ghost w-full" style="font-size:12px" onclick="window.openTrade()">💬 Trade / Message</button>
             <button class="btn-danger w-full" style="font-size:12px" onclick="window.deleteItem()">🗑 Remove</button>
           </div>
@@ -422,6 +423,7 @@
           <table class="detail-meta-table" id="detail-meta"></table>
           <div id="detail-extra" style="margin-top:16px"></div>
           <div class="flex-col gap-2" style="margin-top:16px;display:none" id="detail-actions-mobile">
+            <button class="btn-ghost w-full" style="font-size:13px" onclick="window.openEditItem(window._state.detailItem?.id)">✎ Edit</button>
             <button class="btn-ghost w-full" style="font-size:13px" onclick="window.openTrade()">💬 Trade / Message</button>
             <button class="btn-danger w-full" style="font-size:13px" onclick="window.deleteItem()">🗑 Remove item</button>
           </div>

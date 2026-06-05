@@ -7,7 +7,7 @@
 import { _state, MEDIA_TYPES } from './state.js';
 import { saveState } from './storage.js';
 import { buildThemePickers } from './theme.js';
-import { buildManualForm, resetComicTags } from './forms.js';
+import { buildManualForm, resetComicTags, populateManualForm } from './forms.js';
 
 // FIX: stopCamera is imported lazily inside navigate() to avoid a
 // circular dependency (scanner.js → lookup.js → ui.js → scanner.js).
@@ -21,6 +21,7 @@ const PAGES = ['home', 'login', 'signup', 'collection', 'discover', 'trade', 'pr
 
 let _currentPage = 'home';
 window._currentPage = _currentPage;
+let _tradeUnsubscribe = null;
 
 export function navigate(page) {
   // Stop camera when leaving the add-modal's scan tab
@@ -83,7 +84,7 @@ window.openModal  = openModal;
 window.closeModal = closeModal;
 
 // ── Add-item modal lifecycle ──────────────────────────────────
-export function openAddModal() {
+export function openAddModal(item) {
   if (!_state.user) { navigate('login'); return; }
 
   // Reset all scan state
@@ -91,11 +92,7 @@ export function openAddModal() {
     'add-step-1', 'scan-result', 'scan-preview-img',
     'cover-scan-result', 'cover-scan-preview', 'book-search-results',
   ];
-  document.getElementById('add-step-1').style.display = '';
-  document.getElementById('add-step-2').style.display = 'none';
-  document.getElementById('add-footer').style.display = 'none';
-
-  ['scan-result', 'scan-preview-img', 'cover-scan-result', 'cover-scan-preview', 'book-search-results'].forEach(id => {
+  ids.forEach(id => {
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';
   });
@@ -105,14 +102,44 @@ export function openAddModal() {
   if (barcodeEl)    barcodeEl.value    = '';
   if (coverTitleEl) coverTitleEl.value = '';
 
-  _state.selectedType = null;
-  _state.editingItem  = {};
-  _state.lookupResult = null;
-  resetComicTags();
+  if (item) {
+    _state.selectedType = MEDIA_TYPES.find(m => m.id === item.type) || _state.selectedType;
+    _state.editingItem = JSON.parse(JSON.stringify(item));
+    _state.editingItem._coverData = item.coverData || item._coverData || null;
+    _state.lookupResult = null;
+    resetComicTags();
+
+    document.getElementById('add-step-1').style.display = 'none';
+    document.getElementById('add-step-2').style.display = '';
+    document.getElementById('add-footer').style.display = 'flex';
+    switchTab('manual-tab', 'add');
+    buildManualForm();
+    populateManualForm(item);
+
+    const titleEl = document.getElementById('add-modal-title');
+    const saveBtn = document.getElementById('add-save-btn');
+    if (titleEl) titleEl.textContent = 'Edit item';
+    if (saveBtn) saveBtn.textContent = 'Save changes';
+  } else {
+    _state.selectedType = null;
+    _state.editingItem  = {};
+    _state.lookupResult = null;
+    resetComicTags();
+
+    document.getElementById('add-step-1').style.display = '';
+    document.getElementById('add-step-2').style.display = 'none';
+    document.getElementById('add-footer').style.display = 'none';
+
+    const titleEl = document.getElementById('add-modal-title');
+    const saveBtn = document.getElementById('add-save-btn');
+    if (titleEl) titleEl.textContent = 'Add to collection';
+    if (saveBtn) saveBtn.textContent = 'Save to collection';
+  }
 
   import('./scanner.js').then(s => s.stopCamera()).catch(() => {});
   openModal('modal-add');
 }
+
 window.openAddModal = openAddModal;
 
 export function selectType(id) {
@@ -230,9 +257,34 @@ const DEMO_COLLECTION = [
   { id:'d6', type:'comic',    typeLabel:'Comic Book',   icon:'🦸', fields:{ title:'X-Men #1',                publisher:'Marvel',         pub_date:'Sep 1963', condition:'Good',      writer:'Stan Lee'                              }, coverData:null, source:'manual'      },
 ];
 
-function renderDiscover() {
+async function renderDiscover() {
   const grid = document.getElementById('discover-grid');
   if (!grid) return;
+
+  if (window._fb?.enabled && window._fb.getCommunityItems) {
+    try {
+      const communityItems = await window._fb.getCommunityItems();
+      if (communityItems.length) {
+        grid.innerHTML = communityItems.map(i => {
+          const title = i.fields?.title || i.fields?.album || i.fields?.artist || 'Item';
+          const sub   = i.fields?.author || i.fields?.artist || i.fields?.writer || i.fields?.year || '';
+          const username = i.username ? `@${i.username}` : '@collector';
+          return `<div class="col-item fade-in">
+            <div class="col-thumb">${i.coverData ? `<img src="${i.coverData}" alt="${title}">` : (i.icon || '📦')}<div class="col-badge">${i.typeLabel}</div></div>
+            <div class="col-info">
+              <div class="col-title truncate">${title}</div>
+              <div class="col-meta truncate">${sub}</div>
+              <div class="col-meta" style="margin-top:4px;color:var(--accent);font-size:11px;font-family:var(--font-m)">${username}</div>
+            </div>
+          </div>`;
+        }).join('');
+        return;
+      }
+    } catch (e) {
+      console.warn('Community items failed to load:', e);
+    }
+  }
+
   const all = [...DEMO_COLLECTION, ..._state.collection.slice(0, 6)];
   grid.innerHTML = all.map(i => {
     const title = i.fields?.title || i.fields?.album || i.fields?.artist || 'Item';
@@ -254,6 +306,27 @@ function renderDiscover() {
 
 function renderTrade() {
   _renderConvoList();
+
+  if (window._fb?.enabled && window._fb.subscribeToMessages && _state.user?.username) {
+    if (_tradeUnsubscribe) {
+      _tradeUnsubscribe();
+      _tradeUnsubscribe = null;
+    }
+    _tradeUnsubscribe = window._fb.subscribeToMessages(_state.user.username, rawMessages => {
+      const grouped = {};
+      rawMessages.forEach(m => {
+        const partner = m.from === _state.user.username ? m.to : m.from;
+        if (!grouped[partner]) grouped[partner] = { to: partner, msgs: [] };
+        grouped[partner].msgs.push({
+          from: m.from,
+          text: m.text,
+          time: m.createdAt?.toDate ? m.createdAt.toDate().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) : new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }),
+        });
+      });
+      _state.messages = Object.values(grouped).sort((a, b) => b.msgs.length - a.msgs.length);
+      _renderConvoList();
+    });
+  }
 
   const tradersGrid = document.getElementById('traders-grid');
   if (tradersGrid) {
@@ -300,8 +373,8 @@ window._openConvo = function(idx) {
     <div style="font-weight:600;font-size:13px;padding-bottom:10px;border-bottom:1px solid var(--border)">💬 ${m.to}</div>
     <div class="flex-col gap-2" style="flex:1;overflow-y:auto;padding:8px 0" id="chat-msgs">
       ${m.msgs.map(msg => `
-        <div style="display:flex;flex-direction:column;align-items:${msg.from === 'me' ? 'flex-end' : 'flex-start'}">
-          <div class="msg-bubble ${msg.from === 'me' ? 'me' : 'them'}">${msg.text}</div>
+        <div style="display:flex;flex-direction:column;align-items:${msg.from === _state.user?.username ? 'flex-end' : 'flex-start'}">
+          <div class="msg-bubble ${msg.from === _state.user?.username ? 'me' : 'them'}">${msg.text}</div>
           <div class="msg-time">${msg.time}</div>
         </div>`).join('')}
     </div>
@@ -316,12 +389,16 @@ window._sendChatMsg = async function(idx) {
   const inp  = document.getElementById('chat-input');
   const text = inp?.value.trim();
   if (!text) return;
+  const from = _state.user?.username || 'me';
   _state.messages[idx].msgs.push({
-    from: 'me', text,
+    from, text,
     time: new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }),
   });
-  if (window._fb?.enabled) await window._fb.saveMessages(_state.messages);
-  else saveState();
+  if (window._fb?.enabled && window._fb.sendMessage) {
+    await window._fb.sendMessage(_state.messages[idx].to, text);
+  } else if (window._fb?.enabled) {
+    await window._fb.saveMessages(_state.messages);
+  } else saveState();
   window._openConvo(idx);
   if (inp) inp.value = '';
 };
@@ -331,15 +408,20 @@ window.sendTradeMessage = async function() {
   const text = document.getElementById('trade-msg')?.value.trim();
   if (!to || !text) { toast('Please fill in all fields', 'error'); return; }
   const msg = {
-    from: 'me', text,
+    from: _state.user?.username || 'me', text,
     time: new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }),
   };
   const existing = _state.messages.find(m => m.to === to);
   if (existing) existing.msgs.push(msg);
   else _state.messages.push({ to, msgs: [msg] });
   _state.trades++;
-  if (window._fb?.enabled) await window._fb.saveMessages(_state.messages);
-  else saveState();
+  if (window._fb?.enabled && window._fb.sendMessage) {
+    await window._fb.sendMessage(to, text);
+  } else if (window._fb?.enabled) {
+    await window._fb.saveMessages(_state.messages);
+  } else {
+    saveState();
+  }
   closeModal('modal-trade');
   toast('Message sent to ' + to, 'success');
 };
@@ -413,8 +495,10 @@ export function renderProfile() {
 
   const setName  = document.getElementById('set-name');
   const setEmail = document.getElementById('set-email');
+  const setBio   = document.getElementById('set-bio');
   if (setName)  setName.value  = `${u.firstName} ${u.lastName}`;
   if (setEmail) setEmail.value = u.email || '';
+  if (setBio)   setBio.value   = u.bio || '';
 
   const profGrid = document.getElementById('prof-col-grid');
   if (profGrid) {
@@ -434,12 +518,14 @@ window.renderProfile = renderProfile;
 window.saveSettings = async function() {
   const nameEl  = document.getElementById('set-name');
   const emailEl = document.getElementById('set-email');
+  const bioEl   = document.getElementById('set-bio');
   if (!_state.user) return;
 
   const parts = (nameEl?.value.trim() || '').split(' ');
   _state.user.firstName = parts[0] || _state.user.firstName;
   _state.user.lastName  = parts.slice(1).join(' ') || _state.user.lastName;
   _state.user.email     = emailEl?.value.trim() || _state.user.email;
+  _state.user.bio       = bioEl?.value.trim() || _state.user.bio;
 
   const avatarEl = document.getElementById('nav-avatar');
   if (avatarEl) avatarEl.textContent = (_state.user.firstName || '?')[0].toUpperCase();
@@ -449,6 +535,7 @@ window.saveSettings = async function() {
       firstName: _state.user.firstName,
       lastName:  _state.user.lastName,
       email:     _state.user.email,
+      bio:       _state.user.bio,
     });
   }
   saveState();

@@ -46,8 +46,9 @@ if (!FIREBASE_ENABLED) {
         signOut, onAuthStateChanged, updateProfile,
       } = await import("https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js");
       const {
-        getFirestore, doc, setDoc, getDoc, collection,
-        addDoc, deleteDoc, onSnapshot, serverTimestamp, orderBy, query,
+        getFirestore, doc, setDoc, getDoc, collection, collectionGroup,
+        addDoc, deleteDoc, getDocs, onSnapshot, serverTimestamp, orderBy,
+        query, where, limit,
       } = await import("https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js");
 
       const app  = initializeApp(FIREBASE_CONFIG);
@@ -124,14 +125,20 @@ if (!FIREBASE_ENABLED) {
         saveItem: async (item) => {
           if (!window._state.user) return null;
           const uid = window._state.user.id;
+          const username = window._state.user.username || window._state.user.email || 'anonymous';
           const { id, ...data } = item;
+          const payload = {
+            ...data,
+            username,
+            ownerId: uid,
+          };
           // Only treat as update if id is a Firestore doc id (not our local 'i'+timestamp)
           if (id && !id.startsWith("i")) {
-            await setDoc(doc(db, "users", uid, "collection", id), data, { merge: true });
+            await setDoc(doc(db, "users", uid, "collection", id), payload, { merge: true });
             return id;
           }
           const ref = await addDoc(collection(db, "users", uid, "collection"), {
-            ...data,
+            ...payload,
             dateAdded: serverTimestamp(),
           });
           return ref.id;
@@ -164,6 +171,35 @@ if (!FIREBASE_ENABLED) {
             if (d.messages) window._state.messages = d.messages;
             if (d.trades)   window._state.trades   = d.trades;
           }
+        },
+
+        getCommunityItems: async () => {
+          const q = query(
+            collectionGroup(db, 'collection'),
+            orderBy('dateAdded', 'desc'),
+            limit(24)
+          );
+          const snap = await getDocs(q);
+          return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        },
+
+        sendMessage: async (to, text) => {
+          if (!window._state.user) return null;
+          const from = window._state.user.username || window._state.user.email || 'unknown';
+          return addDoc(collection(db, 'messages'), {
+            from, to, text,
+            participants: [from, to],
+            createdAt: serverTimestamp(),
+          });
+        },
+
+        subscribeToMessages: (username, cb) => {
+          const q = query(
+            collection(db, 'messages'),
+            where('participants', 'array-contains', username),
+            orderBy('createdAt', 'asc')
+          );
+          return onSnapshot(q, snap => cb(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
         },
       };
 

@@ -5,7 +5,7 @@
 
 import { _state, MEDIA_TYPES, FIELD_LABELS } from './state.js';
 import { saveState } from './storage.js';
-import { toast, openModal, closeModal, switchTab } from './ui.js';
+import { toast, openModal, closeModal, switchTab, openAddModal } from './ui.js';
 import { _comicTagSelected, resetComicTags } from './forms.js';
 
 // ═══════════════════════════════════════════════════════════════
@@ -15,16 +15,17 @@ import { _comicTagSelected, resetComicTags } from './forms.js';
 export async function saveItem() {
   if (!_state.selectedType) { toast('Please select a media type', 'error'); return; }
 
+  const isEdit = Boolean(_state.editingItem?.id);
   const item = {
-    id:        'i' + Date.now(),
+    id:        isEdit ? _state.editingItem.id : 'i' + Date.now(),
     type:      _state.selectedType.id,
     typeLabel: _state.selectedType.label,
     icon:      _state.selectedType.icon,
-    dateAdded: new Date().toISOString(),
+    dateAdded: _state.editingItem?.dateAdded || new Date().toISOString(),
     coverData: _state.editingItem._coverData || null,
     fields:    {},
     comicTags: JSON.parse(JSON.stringify(_comicTagSelected)),
-    source:    _state.lookupResult?.source || 'manual',
+    source:    _state.lookupResult?.source || _state.editingItem?.source || 'manual',
   };
 
   // Collect all [data-field] inputs
@@ -46,7 +47,9 @@ export async function saveItem() {
     try { await window._fb.saveItem(item); }
     catch (e) { toast('Save failed: ' + e.message, 'error'); return; }
   } else {
-    _state.collection.unshift(item);
+    const idx = _state.collection.findIndex(i => i.id === item.id);
+    if (idx > -1) _state.collection[idx] = item;
+    else _state.collection.unshift(item);
     saveState();
   }
 
@@ -237,6 +240,13 @@ export function openDetail(id) {
   openModal('modal-detail');
 }
 window.openDetail = openDetail;
+
+export function openEditItem(id) {
+  const item = _state.collection.find(i => i.id === id);
+  if (!item) return;
+  openAddModal(item);
+}
+window.openEditItem = openEditItem;
 
 function _handleDetailResponsive() {
   const isMobile = window.innerWidth < 600;

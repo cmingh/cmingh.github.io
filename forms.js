@@ -184,6 +184,38 @@ export function previewCover(e) {
 }
 window.previewCover = previewCover;
 
+export function populateManualForm(item) {
+  if (!item) return;
+  const preview = document.getElementById('cover-preview');
+  if (preview) {
+    preview.innerHTML = item.coverData
+      ? `<img src="${item.coverData}" style="width:100%;height:100%;object-fit:cover">`
+      : (MEDIA_TYPES.find(m => m.id === item.type)?.icon || '📦');
+  }
+
+  if (item.fields) {
+    Object.entries(item.fields).forEach(([key, value]) => {
+      const el = document.querySelector(`[data-field="${key}"]`);
+      if (el) el.value = value || '';
+    });
+  }
+
+  if (item.comicTags && typeof item.comicTags === 'object') {
+    Object.entries(item.comicTags).forEach(([field, val]) => {
+      if (Array.isArray(val)) {
+        _comicTagSelected[field] = [...val];
+      } else if (val) {
+        _comicTagSelected[field] = val;
+      }
+      document.querySelectorAll(`[data-field="${field}"]`).forEach(el => {
+        if (Array.isArray(val) ? val.includes(el.dataset.val) : el.dataset.val === val) {
+          el.classList.add('active');
+        }
+      });
+    });
+  }
+}
+
 // ── Internal helpers ──────────────────────────────────────────
 function _fieldLabel(f) {
   const LABELS = {
