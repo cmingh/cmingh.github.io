@@ -30,10 +30,11 @@
             <div class="hero-content">
                 <h1>Welcome to MediaNest</h1>
                 <p>Track your books, movies, and media seamlessly.</p>
-                
-                <div id="home-media-grid"></div>
-
                 <button onclick="setView('login')" class="btn-primary">Get Started</button>
+            </div>
+
+            <div class="media-container-wrap">
+                <div id="home-media-grid" class="media-grid"></div>
             </div>
         </section>
 
@@ -59,8 +60,8 @@
             <h2>My Collection</h2>
             
             <div class="view-toggle-controls" style="margin-bottom: 1rem;">
-                <button id="vt-grid" onclick="setView('grid')" class="active">Grid View</button>
-                <button id="vt-list" onclick="setView('list')">List View</button>
+                <button id="vt-grid" class="active">Grid View</button>
+                <button id="vt-list">List View</button>
             </div>
             
             <div class="search-tools">
@@ -74,12 +75,12 @@
                 </div>
             </div>
 
-            <div id="add-media-grid"></div>
+            <div class="media-container-wrap">
+                <div id="add-media-grid" class="media-grid"></div>
+            </div>
 
-            <div id="col-grid">
-                </div>
-            <div id="col-list" style="display: none;">
-                </div>
+            <div id="col-grid"></div>
+            <div id="col-list" style="display: none;"></div>
 
             <div class="scanner-container">
                 <div class="scanner-controls">
