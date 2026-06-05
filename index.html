@@ -22,6 +22,7 @@
     </nav>
 
     <div id="theme-picker-container" style="display: none;"></div>
+    <div id="theme-picker" style="display: none;"></div>
 
     <main id="main-content">
         
@@ -29,9 +30,9 @@
             <div class="hero-content">
                 <h1>Welcome to MediaNest</h1>
                 <p>Track your books, movies, and media seamlessly.</p>
-
-                <div id="home-media-grid"></div>
                 
+                <div id="home-media-grid"></div>
+
                 <button onclick="setView('login')" class="btn-primary">Get Started</button>
             </div>
         </section>
@@ -76,9 +77,7 @@
                     <button onclick="stopCamera()">Stop Camera</button>
                     <button onclick="captureFrame()">Scan Frame</button>
                 </div>
-                
                 <video id="scanner-video" autoplay playsinline style="display:none;"></video>
-                
                 <div id="scan-dropzone" ondragover="event.preventDefault()" ondrop="handleScanDrop(event)">
                     Drop barcode image here or 
                     <input type="file" onchange="handleScanFile(event)">
@@ -86,9 +85,7 @@
             </div>
 
             <div id="scan-result" style="display: none;"></div>
-
             <div id="media-grids"></div>
-            <div id="media-container"></div>
         </section>
     </main>
 
@@ -101,17 +98,6 @@
                 <button onclick="deleteItem()" class="btn-delete">Delete Item</button>
                 <button onclick="document.getElementById('modal-detail').style.display='none'" class="btn-close">Close</button>
             </div>
-        </div>
-    </div>
-
-    <div id="modal-trade" class="modal" style="display: none;">
-        <div class="modal-content">
-            <h3>Trade/Transfer Item Setup</h3>
-            <div id="trade-dropzone" ondragover="event.preventDefault()" ondrop="handleCoverScanDrop(event)">
-                Drop cover imagery updates here or
-                <input type="file" onchange="handleCoverScanFile(event)">
-            </div>
-            <button onclick="document.getElementById('modal-trade').style.display='none'" class="btn-close">Cancel</button>
         </div>
     </div>
 
