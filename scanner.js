@@ -165,76 +165,10 @@ export function processScanFile(file) {
   reader.readAsDataURL(file);
 }
 
-// ── Core ZXing decode ─────────────────────────────────────────
-async function _runZXingOnDataUrl(dataUrl) {
-  if (!window.ZXing) {
-    showScanStatus('no-match', '⚠ ZXing library not loaded. Type the barcode manually below.');
-    return;
-  }
+// ── Bind Barcode functions to Window Global Scope so index.html can call them ──
+window.handleScanDrop = handleScanDrop;
+window.handleScanFile = handleScanFile;
 
-  try {
-    // Load image into an HTMLImageElement first
-    const image = new Image();
-    await new Promise((res, rej) => {
-      image.onload  = res;
-      image.onerror = rej;
-      image.src     = dataUrl;
-    });
-
-    // Draw onto an offscreen canvas
-    const canvas = document.createElement('canvas');
-    canvas.width  = image.naturalWidth  || image.width;
-    canvas.height = image.naturalHeight || image.height;
-    canvas.getContext('2d').drawImage(image, 0, 0);
-
-    const codeReader = new ZXing.BrowserMultiFormatReader();
-    let code;
-
-    try {
-      // Primary: synchronous canvas decode (fastest, most compatible with ZXing 0.19.x)
-      const result = codeReader.decodeFromCanvas(canvas);
-      code = result.getText();
-    } catch (_) {
-      // Fallback: async decode from data URL
-      const result = await codeReader.decodeFromImage(undefined, dataUrl);
-      code = result.getText();
-    }
-
-    const manualEl = document.getElementById('barcode-manual');
-    if (manualEl) manualEl.value = code;
-
-    showScanStatus('matched',
-      `<strong>✓ Barcode detected:</strong> <span class="mono" style="color:var(--accent)">${code}</span>
-       <br><span style="color:var(--text2);font-size:12px;display:block;margin-top:4px">Looking up item details…</span>`
-    );
-    toast('Barcode read: ' + code, 'success');
-    lookupBarcode(code);
-
-  } catch (_err) {
-    showScanStatus('no-match',
-      `<strong>⚠ No barcode found in this photo.</strong>
-       <br><span style="color:var(--text2);font-size:12px;display:block;margin-top:6px">
-         Tips: ensure the barcode is in focus, well-lit, and fills most of the frame.
-         <br>Try the <strong>Book Cover</strong> tab, or type the barcode manually below.
-       </span>`
-    );
-  }
-}
-
-// ── Scan-status helpers ───────────────────────────────────────
-export function showScanStatus(type, html) {
-  const el = document.getElementById('scan-result');
-  if (!el) return;
-  el.style.display = '';
-  el.innerHTML = `<div class="scan-status-box ${type}">${html}</div>`;
-}
-
-export function showCoverScanStatus(type, html) {
-  const el = document.getElementById('cover-scan-result');
-  if (!el) return;
-  el.style.display = '';
-  el.innerHTML = `<div class="scan-status-box ${type}">${html}</div>`;
-}
 
 // ═══════════════════════════════════════════════════════════════
 // BOOK COVER SCAN — file upload → OCR → title search
@@ -264,6 +198,10 @@ export function processCoverScanFile(file) {
   };
   reader.readAsDataURL(file);
 }
+
+// ── Bind Book Cover functions to Window Global Scope so index.html can call them ──
+window.handleCoverScanDrop = handleCoverScanDrop;
+window.handleCoverScanFile = handleCoverScanFile;
 
 // ── OCR via Tesseract.js (lazy-loaded from CDN) ───────────────
 async function _extractTextFromCoverImage(dataUrl) {
