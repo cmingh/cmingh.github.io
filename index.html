@@ -365,25 +365,25 @@
           <div id="scan-result" style="margin-top:12px;display:none"></div>
         </div>
 
-        <!-- Book cover scan tab -->
+        <!-- Cover scan tab (generic, works for all media types) -->
         <div class="tab-content" id="tab-cover-tab">
-          <div class="info-banner">ℹ️ <span><strong>Book cover scan:</strong> Upload a photo of the cover — we'll try OCR to extract the title and search Open Library. Or type the title below.</span></div>
+          <div class="info-banner" id="cover-info-banner">ℹ️ <span id="cover-info-text"><strong>Cover scan:</strong> Upload a photo of the cover — we'll try OCR to extract the title and search for it. Or type the title/artist below.</span></div>
           <div class="scanner-box" id="cover-drop"
                onclick="document.getElementById('cover-scan-file').click()"
                ondragover="event.preventDefault();this.classList.add('drag-over')"
                ondragleave="this.classList.remove('drag-over')"
                ondrop="window.handleCoverScanDrop(event)">
-            <div class="scanner-icon">📚</div>
-            <div class="fw-500">Click or drag a photo of the book cover</div>
+            <div class="scanner-icon" id="cover-scanner-icon">📚</div>
+            <div class="fw-500" id="cover-drop-text">Click or drag a photo of the cover</div>
             <div class="text-muted text-sm" style="margin-top:6px">JPG · PNG · HEIC</div>
             <input type="file" id="cover-scan-file" accept="image/*" capture="environment" style="display:none"
                    onchange="window.handleCoverScanFile(event)">
           </div>
-          <img id="cover-scan-preview" class="scan-preview" style="display:none" alt="Book cover">
+          <img id="cover-scan-preview" class="scan-preview" style="display:none" alt="Cover">
           <div style="display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap">
-            <input class="form-input" id="cover-title-input" placeholder="Or type title / author to search…"
-                   style="flex:1;min-width:180px" onkeydown="if(event.key==='Enter')window.searchBookByTitle()">
-            <button class="btn-primary" onclick="window.searchBookByTitle()" style="flex-shrink:0">Search</button>
+            <input class="form-input" id="cover-title-input" placeholder="Or type title / artist / name to search…"
+                   style="flex:1;min-width:180px" onkeydown="if(event.key==='Enter')window.searchMediaByTitle()">
+            <button class="btn-primary" onclick="window.searchMediaByTitle()" style="flex-shrink:0">Search</button>
           </div>
           <div id="cover-scan-result" style="margin-top:12px;display:none"></div>
           <div class="book-scan-results" id="book-search-results" style="display:none"></div>

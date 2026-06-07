@@ -97,6 +97,9 @@ function _startContinuousZXingScan() {
   const codeReader = new ZXing.BrowserMultiFormatReader();
   const video  = document.getElementById('camera-video');
   const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  let lastSeenCode = null; // Prevent duplicate lookups
+  let sameScanCount = 0;
 
   const tick = async () => {
     if (!_cameraScanning || !video?.videoWidth) {
@@ -105,32 +108,67 @@ function _startContinuousZXingScan() {
     }
     canvas.width  = video.videoWidth;
     canvas.height = video.videoHeight;
-    canvas.getContext('2d').drawImage(video, 0, 0);
+    ctx.drawImage(video, 0, 0);
 
     try {
       // decodeFromCanvas throws NotFoundException when no barcode found — that's normal.
-      const result = codeReader.decodeFromCanvas(canvas);
+      let result = null;
+      try {
+        result = codeReader.decodeFromCanvas(canvas);
+      } catch (_canvasErr) {
+        // Try with hints to improve detection
+        const hints = new Map();
+        if (window.ZXing?.DecodeHintType) {
+          hints.set(window.ZXing.DecodeHintType.TRY_HARDER, true);
+        }
+        try {
+          result = await codeReader.decodeFromImage(canvas, hints);
+        } catch (_) {
+          // Both methods failed, keep scanning
+        }
+      }
+
       if (result) {
         const code = result.getText();
-        _cameraScanning = false;
-        stopCamera();
+        
+        // Only process if different from last detected code
+        if (code !== lastSeenCode) {
+          lastSeenCode = code;
+          sameScanCount = 0;
+          _cameraScanning = false;
+          stopCamera();
 
-        const manualEl = document.getElementById('barcode-manual');
-        if (manualEl) manualEl.value = code;
+          const manualEl = document.getElementById('barcode-manual');
+          if (manualEl) manualEl.value = code;
 
-        showScanStatus('matched',
-          `<strong>✓ Barcode detected:</strong> <span class="mono" style="color:var(--accent)">${code}</span>
-           <br><span style="color:var(--text2);font-size:12px;display:block;margin-top:4px">Looking up item details…</span>`
-        );
-        toast('Barcode read: ' + code, 'success');
-        lookupBarcode(code);
-        return;
+          showScanStatus('matched',
+            `<strong>✓ Barcode detected:</strong> <span class="mono" style="color:var(--accent)">${code}</span>
+             <br><span style="color:var(--text2);font-size:12px;display:block;margin-top:4px">Looking up item details…</span>`
+          );
+          toast('Barcode read: ' + code, 'success');
+          lookupBarcode(code);
+          return;
+        } else {
+          sameScanCount++;
+          // Allow confirming same barcode on second detection
+          if (sameScanCount > 1) {
+            _cameraScanning = false;
+            stopCamera();
+            toast('Barcode confirmed: ' + code, 'success');
+            return;
+          }
+        }
+      } else {
+        lastSeenCode = null;
+        sameScanCount = 0;
       }
-    } catch (_) {
-      // NotFoundException on every frame without a barcode — expected, keep scanning.
+    } catch (e) {
+      // NotFoundException and other errors — expected, keep scanning.
+      lastSeenCode = null;
+      sameScanCount = 0;
     }
 
-    if (_cameraScanning) setTimeout(tick, 200);
+    if (_cameraScanning) requestAnimationFrame(tick);
   };
 
   setTimeout(tick, 500); // give video a moment to stabilise

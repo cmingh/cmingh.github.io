@@ -10,7 +10,7 @@ import { buildMediaGrids, navigate, openAddModal, selectType, backToStep1, openT
 import { updateNavForAuth, doLogin, doSignup, logout } from './auth.js';
 import { saveItem, deleteItem, setCollectionView, renderCollection, openDetail } from './collection.js';
 import { startCamera, stopCamera, captureFrame, handleScanDrop, handleScanFile, handleCoverScanDrop, handleCoverScanFile } from './scanner.js';
-import { lookupBarcode, searchBookByTitle }          from './lookup.js';
+import { lookupBarcode, searchBookByTitle, searchMediaByTitle }          from './lookup.js';
 import { _state }                                    from './state.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -50,6 +50,7 @@ window.handleCoverScanFile = handleCoverScanFile;
 
 window.lookupBarcode       = lookupBarcode;
 window.searchBookByTitle   = searchBookByTitle;
+window.searchMediaByTitle  = searchMediaByTitle;
 
 window.renderProfile       = () => import('./ui.js').then(m => m.renderProfile());
 

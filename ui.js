@@ -147,6 +147,10 @@ export function selectType(id) {
   document.getElementById('add-step-1').style.display = 'none';
   document.getElementById('add-step-2').style.display = '';
   document.getElementById('add-footer').style.display = 'flex';
+  
+  // Update cover tab UI based on media type
+  _updateCoverTabUI();
+  
   switchTab('scan-tab', 'add');
   buildManualForm();
 }
@@ -166,6 +170,56 @@ export function openTrade() {
   openModal('modal-trade');
 }
 window.openTrade = openTrade;
+
+// ─ Update cover tab UI based on selected media type ─
+function _updateCoverTabUI() {
+  const mt = _state.selectedType;
+  if (!mt) return;
+  
+  const coverDropText = document.getElementById('cover-drop-text');
+  const coverIcon = document.getElementById('cover-scanner-icon');
+  const coverInfoText = document.getElementById('cover-info-text');
+  
+  let scanText = 'Click or drag a photo of the cover';
+  let infoText = 'we\'ll try OCR to extract the title and search for it';
+  
+  if (mt.id === 'vinyl') {
+    scanText = 'Click or drag a photo of the vinyl cover';
+    infoText = 'we\'ll try OCR to extract the artist/album and search for it';
+    if (coverIcon) coverIcon.textContent = '🎵';
+  } else if (mt.id === 'cd' || mt.id === 'cassette') {
+    scanText = `Click or drag a photo of the ${mt.id === 'cd' ? 'CD' : 'cassette'} cover`;
+    infoText = 'we\'ll try OCR to extract the artist/album and search for it';
+    if (coverIcon) coverIcon.textContent = mt.id === 'cd' ? '💿' : '📼';
+  } else if (mt.id === 'dvd' || mt.id === 'vhs') {
+    scanText = `Click or drag a photo of the ${mt.id === 'dvd' ? 'DVD' : 'VHS'} cover`;
+    infoText = 'we\'ll try OCR to extract the title and search for it';
+    if (coverIcon) coverIcon.textContent = mt.id === 'dvd' ? '📀' : '📹';
+  } else if (mt.id === 'game') {
+    scanText = 'Click or drag a photo of the game cover';
+    infoText = 'we\'ll try OCR to extract the title and search for it';
+    if (coverIcon) coverIcon.textContent = '🎮';
+  } else if (mt.id === 'comic' || mt.id === 'manga') {
+    scanText = `Click or drag a photo of the ${mt.id === 'comic' ? 'comic' : 'manga'} cover`;
+    infoText = 'we\'ll try OCR to extract the title and search for it';
+    if (coverIcon) coverIcon.textContent = mt.id === 'comic' ? '🦸' : '📘';
+  } else if (mt.id === 'magazine' || mt.id === 'newspaper') {
+    scanText = `Click or drag a photo of the ${mt.label}`;
+    infoText = 'we\'ll try OCR to extract the title and search for it';
+    if (coverIcon) coverIcon.textContent = mt.id === 'magazine' ? '📖' : '📰';
+  } else if (mt.id === 'photo') {
+    scanText = 'Click or drag a photo';
+    infoText = 'we\'ll try OCR to extract metadata or search by subject';
+    if (coverIcon) coverIcon.textContent = '🖼';
+  } else {
+    scanText = `Click or drag a photo of the ${mt.label.toLowerCase()} cover`;
+    infoText = 'we\'ll try OCR to extract the title and search for it';
+    if (coverIcon) coverIcon.textContent = mt.icon;
+  }
+  
+  if (coverDropText) coverDropText.textContent = scanText;
+  if (coverInfoText) coverInfoText.innerHTML = `<strong>Cover scan:</strong> Upload a photo — ${infoText}. Or type the title/artist/name below.`;
+}
 
 // ═══════════════════════════════════════════════════════════════
 // TABS

@@ -100,6 +100,25 @@ export function applyLookupResult() {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// MEDIA TITLE SEARCH (generic, for all media types with OpenLibrary)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * searchMediaByTitle — entry point for all media types
+ * Uses OpenLibrary search which works for:
+ * - Books, comics, manga, magazines, newspapers
+ * - CDs, vinyl, cassettes (by artist/album)
+ * - Games, DVDs, VHS (by title)
+ */
+export async function searchMediaByTitle(queryOverride) {
+  const query = queryOverride || document.getElementById('cover-title-input')?.value.trim();
+  if (!query) { toast('Enter a title, artist, or name to search', 'error'); return; }
+  
+  // For all media types, use book search which is generic enough via OpenLibrary
+  return searchBookByTitle(query);
+}
+
+// ═══════════════════════════════════════════════════════════════
 // BOOK TITLE SEARCH (used by book-cover scan tab)
 // ═══════════════════════════════════════════════════════════════
 
@@ -181,17 +200,14 @@ export function applyCoverSearchResult(idx) {
     return;
   }
 
-  // Ensure we're in book mode
-  if (_state.selectedType?.id !== 'book') {
-    _state.selectedType = MEDIA_TYPES.find(m => m.id === 'book');
-    buildManualForm();
-  }
+  // Don't force book mode — keep the currently selected media type
+  // The user can correct the type if needed
 
   switchTab('manual-tab', 'add');
   _state.lookupResult = { ...result, source: 'Open Library' };
   _applyResultToForm(result);
   if (result.coverUrl) _fetchCoverAsDataUrl(result.coverUrl);
-  toast('Book details applied! Review and save.', 'success');
+  toast('Details applied! Review and save.', 'success');
 }
 
 // Make applyCoverSearchResult available to inline onclick handlers
@@ -217,6 +233,33 @@ async function _lookupOpenLibrary(isbn) {
       ? (b.cover.large || b.cover.medium || b.cover.small || null)
       : null;
 
+    // Clean up subject/genre data — filter out common noise and metadata
+    const cleanGenres = b.subjects
+      ? b.subjects
+          .slice(0, 5) // Take more initially
+          .map(s => typeof s === 'string' ? s : (s.name || ''))
+          .filter(s => s.length > 0)
+          // Filter out obvious metadata, OCR errors, and overly specific classifications
+          .filter(s => !/^(\d+th century|Biography|Fiction|Young adult|Juvenile|Action|Adventure)$/i.test(s))
+          .filter(s => !/^(Genre:|Category:|Tag:|Label:)/i.test(s))
+          .filter(s => !/^(book|books|work|works|publication|document)$/i.test(s))
+          .slice(0, 3) // Take top 3 after filtering
+          .join(', ')
+      : '';
+    
+    // Extract language code cleanly
+    let language = '';
+    if (b.language) {
+      if (typeof b.language === 'string') {
+        language = b.language.replace('/languages/', '').toUpperCase();
+      } else if (b.language.key) {
+        language = b.language.key.replace('/languages/', '').toUpperCase();
+      } else if (Array.isArray(b.language) && b.language.length > 0) {
+        const lang = b.language[0];
+        language = (typeof lang === 'string' ? lang : lang.key || '').replace('/languages/', '').toUpperCase();
+      }
+    }
+
     return {
       source:       'Open Library',
       title:        b.title || '',
@@ -225,8 +268,8 @@ async function _lookupOpenLibrary(isbn) {
       pub_year:     b.publish_date?.match(/\d{4}/)?.[0] || '',
       isbn,
       pages:        b.number_of_pages?.toString() || '',
-      language:     b.language?.key?.replace('/languages/', '').toUpperCase() || '',
-      genre:        b.subjects ? b.subjects.slice(0, 3).map(s => typeof s === 'string' ? s : (s.name || '')).join(', ') : '',
+      language:     language,
+      genre:        cleanGenres,
       coverUrl,
       suggestedType: 'book',
       description:  b.excerpts?.[0]?.text || '',
