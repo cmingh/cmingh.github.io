@@ -51,15 +51,26 @@ export async function lookupBarcode(codeOverride) {
   const isISBN = code.length === 10 ||
     (code.length === 13 && (code.startsWith('978') || code.startsWith('979')));
 
-  // 6. Try sources in priority order
+  // 6. Try sources in priority order with overall timeout
   let result = null;
-  if (isISBN) {
-    result = await _lookupOpenLibrary(code);
-    if (!result) result = await _lookupGoogleBooks(code);
-    if (!result) result = await _lookupInternetArchive(code);
+  try {
+    // Wrap entire lookup chain in a 15-second timeout
+    const lookupPromise = (async () => {
+      if (isISBN) {
+        result = await _lookupOpenLibrary(code);
+        if (!result) result = await _lookupGoogleBooks(code);
+        if (!result) result = await _lookupInternetArchive(code);
+      }
+      if (!result) result = await _lookupUPCitemdb(code);
+      if (!result && !isISBN) result = await _lookupInternetArchive(code);
+      return result;
+    })();
+    const timeoutPromise = new Promise((_, rej) => setTimeout(() => rej(new Error('Lookup timeout')), 15000));
+    result = await Promise.race([lookupPromise, timeoutPromise]);
+  } catch (e) {
+    console.warn('[lookup] Chain timeout or error:', e);
+    result = null;
   }
-  if (!result) result = await _lookupUPCitemdb(code);
-  if (!result && !isISBN) result = await _lookupInternetArchive(code);
 
   // 7. Render result or failure
   if (result) {
@@ -140,7 +151,7 @@ export async function searchBookByTitle(queryOverride) {
   try {
     const url = `https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&limit=5` +
       `&fields=title,author_name,publisher,first_publish_year,isbn,cover_i,number_of_pages,subject,language`;
-    const r = await _fetchWithTimeout(url, 8000);
+    const r = await _fetchWithTimeout(url, 6000);
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const data = await r.json();
 
@@ -221,7 +232,7 @@ window.applyCoverSearchResult = applyCoverSearchResult;
 async function _lookupOpenLibrary(isbn) {
   try {
     const r = await _fetchWithTimeout(
-      `https://openlibrary.org/api/books?bibkeys=ISBN:${isbn}&format=json&jscmd=data`
+      `https://openlibrary.org/api/books?bibkeys=ISBN:${isbn}&format=json&jscmd=data`, 4000
     );
     if (!r.ok) return null;
     const data = await r.json();
@@ -280,7 +291,7 @@ async function _lookupOpenLibrary(isbn) {
 
 async function _lookupGoogleBooks(isbn) {
   try {
-    const r = await _fetchWithTimeout(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}`, 8000);
+    const r = await _fetchWithTimeout(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}`, 4000);
     if (!r.ok) return null;
     const data = await r.json();
     if (!data.items?.length) return null;
@@ -328,7 +339,7 @@ async function _lookupGoogleBooks(isbn) {
 
 async function _lookupInternetArchive(code) {
   try {
-    const r = await _fetchWithTimeout(`https://archive.org/metadata/isbn_${code}`, 5000);
+    const r = await _fetchWithTimeout(`https://archive.org/metadata/isbn_${code}`, 3000);
     if (!r.ok) return null;
     const data = await r.json();
     if (!data.metadata) return null;
@@ -350,7 +361,7 @@ async function _lookupInternetArchive(code) {
 
 async function _lookupUPCitemdb(upc) {
   try {
-    const r = await _fetchWithTimeout(`https://api.upcitemdb.com/prod/trial/lookup?upc=${upc}`);
+    const r = await _fetchWithTimeout(`https://api.upcitemdb.com/prod/trial/lookup?upc=${upc}`, 4000);
     if (!r.ok) return null;
     const data = await r.json();
     if (data.code !== 'OK' || !data.items?.length) return null;
