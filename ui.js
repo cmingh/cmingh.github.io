@@ -20,7 +20,7 @@ import { buildManualForm, resetComicTags, populateManualForm } from './forms.js'
 // circular dependency (scanner.js → lookup.js → ui.js → scanner.js).
 // Do NOT import stopCamera at the top level here.
 
-const PAGES = ['home', 'login', 'signup', 'collection', 'discover', 'trade', 'profile'];
+const PAGES = ['home', 'login', 'signup', 'collection', 'artists', 'discover', 'trade', 'profile'];
 
 // ═══════════════════════════════════════════════════════════════
 // NAVIGATION
@@ -45,6 +45,10 @@ export function navigate(page) {
   window._currentPage = page;
 
   if (page === 'collection') window.renderCollection?.();
+  if (page === 'artists') {
+    // Dynamically import artist module if needed
+    import('./artist.js').then(m => m.initArtistView()).catch(() => {});
+  }
   if (page === 'discover')   renderDiscover();
   if (page === 'trade')      renderTrade();
   if (page === 'profile')    renderProfile();

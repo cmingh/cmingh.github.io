@@ -1,4 +1,4 @@
-// js/scanner.js  (v4 — zxing-wasm C++ engine, reliable barcode detection)
+// js/scanner.js  (v5 — fixed timeout handling for barcode lookup)
 // ─────────────────────────────────────────────────────────────
 // Decode pipeline for static images:
 //   1. zxing-wasm  (ZXing C++ compiled to WebAssembly — same engine as
@@ -22,9 +22,6 @@ let _cameraStream  = null;
 let _cameraRunning = false;
 
 // ── zxing-wasm state ──────────────────────────────────────────
-// We load the IIFE build once and reuse it.
-// ZXingWASM global is set after load; readBarcodesFromImageFile and
-// readBarcodesFromImageData are destructured from it.
 let _zxingWasmReady = false;
 let _zxingWasmLoading = false;
 let _zxingWasmLoadCallbacks = [];
@@ -90,16 +87,15 @@ const ZXING_READ_OPTIONS = {
     'ITF', 'Codabar',
     'DataMatrix', 'QRCode', 'PDF417', 'Aztec',
   ],
-  tryHarder: true,           // additional processing passes for real-world photos
-  tryRotate: true,           // try rotated variants
-  tryInvert: true,           // try inverted barcodes
-  tryDownscale: true,        // try downscaled versions
-  maxNumberOfSymbols: 1,     // we only need the first one
+  tryHarder: true,
+  tryRotate: true,
+  tryInvert: true,
+  tryDownscale: true,
+  maxNumberOfSymbols: 1,
 };
 
 // ─────────────────────────────────────────────────────────────
 // Decode from a Blob (the most direct zxing-wasm path)
-// readBarcodesFromImageFile accepts Blob/File directly — no canvas needed.
 // ─────────────────────────────────────────────────────────────
 async function _decodeWithZxingWasm(blob) {
   const loaded = await _ensureZxingWasm();
@@ -133,7 +129,7 @@ async function _decodeWithZxingWasmImageData(imageData) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Convert a data URL to a Blob (needed for zxing-wasm file API)
+// Convert a data URL to a Blob
 // ─────────────────────────────────────────────────────────────
 function _dataUrlToBlob(dataUrl) {
   try {
@@ -154,9 +150,7 @@ function _dataUrlToBlob(dataUrl) {
 // Returns the barcode string or null.
 // ─────────────────────────────────────────────────────────────
 async function _decodeBarcodeFromDataUrl(dataUrl) {
-  // ── Engine 1: zxing-wasm (ZXing C++ — most accurate) ──────
-  // Feed the image directly as a Blob — no canvas intermediary,
-  // no quality loss from re-encoding, no size limits.
+  // Engine 1: zxing-wasm (ZXing C++ — most accurate)
   const blob = _dataUrlToBlob(dataUrl);
   if (blob) {
     try {
@@ -175,9 +169,7 @@ async function _decodeBarcodeFromDataUrl(dataUrl) {
     }
   }
 
-  // ── Engine 2: Native BarcodeDetector (Chrome/Edge 83+) ────
-  // Fast and built-in when available; use as a fallback in case
-  // zxing-wasm didn't load (network failure etc.)
+  // Engine 2: Native BarcodeDetector (Chrome/Edge 83+)
   if (window.BarcodeDetector) {
     try {
       const detector = new BarcodeDetector({
@@ -213,6 +205,9 @@ function _dataUrlToImage(dataUrl) {
 
 // ─────────────────────────────────────────────────────────────
 // PUBLIC: decode a data URL and trigger lookup
+// FIX: lookupBarcode has its own internal timeout — do NOT add
+// a second outer timeout here. Just let it run and handle the
+// result gracefully.
 // ─────────────────────────────────────────────────────────────
 async function _decodeAndLookup(dataUrl) {
   showScanStatus('loading', '<span class="spin">⏳</span> Scanning barcode…');
@@ -229,16 +224,13 @@ async function _decodeAndLookup(dataUrl) {
     );
     toast('Barcode read: ' + code, 'success');
 
+    // FIX: Don't wrap lookupBarcode in another Promise.race timeout —
+    // lookupBarcode already has a 12-second timeout internally.
+    // Just call it and catch any errors.
     try {
-      await Promise.race([
-        lookupBarcode(code),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 15000)),
-      ]);
+      await lookupBarcode(code);
     } catch (_) {
-      showScanStatus('no-match',
-        `<strong>⚠ Lookup timed out for <span class="mono">${code}</span>.</strong>
-         <br><span style="color:var(--text2);font-size:12px">The barcode was read — try typing it in the field below and pressing Look up.</span>`
-      );
+      // lookupBarcode already handles its own no-match display
     }
   } else {
     showScanStatus('no-match',
@@ -285,7 +277,7 @@ export async function startCamera() {
     _cameraRunning = true;
     toast('Camera active — point at a barcode', 'success');
 
-    // Warm up zxing-wasm in background while user positions the barcode
+    // Warm up zxing-wasm in background
     _ensureZxingWasm().catch(() => {});
 
     _startLiveScan();
@@ -331,16 +323,12 @@ export async function captureFrame() {
 }
 
 // ── Live scan loop ────────────────────────────────────────────
-// Strategy: prefer native BarcodeDetector (synchronous, low overhead).
-// If unavailable, use zxing-wasm via ImageData (also good for live video).
-// Run at ~4 fps to keep the device cool.
 function _startLiveScan() {
   const video  = document.getElementById('camera-video');
   const canvas = document.createElement('canvas');
   let   useNativeDetector = !!window.BarcodeDetector;
   let   nativeDetector    = null;
 
-  // Try to create native detector up front
   if (useNativeDetector) {
     try {
       nativeDetector = new BarcodeDetector({
@@ -367,13 +355,11 @@ function _startLiveScan() {
 
     try {
       if (useNativeDetector && nativeDetector) {
-        // Native BarcodeDetector — fastest path
         const bitmap = await createImageBitmap(canvas);
         const codes  = await nativeDetector.detect(bitmap);
         bitmap.close();
         if (codes?.length) code = codes[0].rawValue;
       } else if (_zxingWasmReady) {
-        // zxing-wasm ImageData path
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         code = await Promise.race([
           _decodeWithZxingWasmImageData(imageData),
@@ -394,14 +380,19 @@ function _startLiveScan() {
          <br><span style="color:var(--text2);font-size:12px;display:block;margin-top:4px">Looking up item details…</span>`
       );
       toast('Barcode read: ' + code, 'success');
-      lookupBarcode(code);
+
+      // FIX: Don't silently fire and forget — await the lookup so status updates work
+      try {
+        await lookupBarcode(code);
+      } catch (_) {
+        // lookupBarcode handles its own UI
+      }
       return;
     }
 
-    if (_cameraRunning) setTimeout(() => requestAnimationFrame(tick), 250); // ~4 fps
+    if (_cameraRunning) setTimeout(() => requestAnimationFrame(tick), 250);
   };
 
-  // Let the video stabilise before scanning
   setTimeout(() => requestAnimationFrame(tick), 800);
 }
 
@@ -450,7 +441,7 @@ export function processScanFile(file) {
       return;
     }
 
-    // Preferred path: pass Blob directly to zxing-wasm (no quality loss)
+    // Preferred path: pass Blob directly to zxing-wasm
     _decodeWithZxingWasm(file).then(async code => {
       if (code) {
         const manualEl = document.getElementById('barcode-manual');
@@ -462,16 +453,11 @@ export function processScanFile(file) {
         );
         toast('Barcode read: ' + code, 'success');
 
+        // FIX: Await the lookup with its internal timeout
         try {
-          await Promise.race([
-            lookupBarcode(code),
-            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 15000)),
-          ]);
+          await lookupBarcode(code);
         } catch (_) {
-          showScanStatus('no-match',
-            `<strong>⚠ Lookup timed out for <span class="mono">${code}</span>.</strong>
-             <br><span style="color:var(--text2);font-size:12px">Barcode was read correctly — type it below and press Look up.</span>`
-          );
+          // lookupBarcode handles its own no-match display
         }
       } else {
         // zxing-wasm returned nothing — try BarcodeDetector via data URL
@@ -480,7 +466,6 @@ export function processScanFile(file) {
           const dataUrl = ev.target.result;
           _state.editingItem._coverData = null;
 
-          // Only run BarcodeDetector if native; otherwise show the failure message
           if (window.BarcodeDetector) {
             const blobCode = await (async () => {
               try {
@@ -501,7 +486,9 @@ export function processScanFile(file) {
                  <br><span style="color:var(--text2);font-size:12px;display:block;margin-top:4px">Looking up item details…</span>`
               );
               toast('Barcode read: ' + blobCode, 'success');
-              lookupBarcode(blobCode);
+              try {
+                await lookupBarcode(blobCode);
+              } catch (_) {}
               return;
             }
           }
@@ -639,7 +626,7 @@ async function _extractTextFromCoverImage(dataUrl) {
     console.warn('[scanner] OCR failed:', ocrErr);
     showCoverScanStatus('info',
       `<strong>ℹ OCR unavailable.</strong>
-       <br><span style="font-size:12px;color:var(--text2)">
+       <br><span style="font-size:12px;color:var(--text2);display:block;margin-top:6px">
          Type the title or artist below and press Search.
        </span>`
     );

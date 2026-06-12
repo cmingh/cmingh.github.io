@@ -1,6 +1,6 @@
-// js/lookup.js  (v3 — per-type API routing, no more OpenLibrary for everything)
+// js/lookup.js  (v4 — per-type API routing, fixed timeout & undefined refs)
 // ─────────────────────────────────────────────────────────────
-// API lookups: barcode → Open Library / UPCitemdb / Internet Archive
+// API lookups: barcode → Open Library / UPCitemdb / Internet Archive / MusicBrainz
 // and title search → Open Library for book cover scan
 // ─────────────────────────────────────────────────────────────
 
@@ -8,6 +8,11 @@ import { _state, MEDIA_TYPES } from './state.js';
 import { toast, switchTab } from './ui.js';
 import { showScanStatus, showCoverScanStatus } from './scanner.js';
 import { buildManualForm } from './forms.js';
+
+// ── Helper: get the currently selected media type id ───────────
+function _currentTypeId() {
+  return _state.selectedType?.id || '';
+}
 
 // ═══════════════════════════════════════════════════════════════
 // BARCODE LOOKUP — the main entry point called by scanner.js
@@ -22,11 +27,11 @@ export async function lookupBarcode(codeOverride) {
     return;
   }
 
-  // 2. Sanitise — strip spaces and hyphens
+  // Sanitise — strip spaces and hyphens
   const code = raw.replace(/[\s\-]/g, '');
   console.log('[lookup] barcode:', code, '| type:', _currentTypeId());
 
-  // 3. Validate: must be 8–14 digits
+  // Validate: must be 8–14 digits
   if (!/^\d{8,14}$/.test(code)) {
     showScanStatus('no-match',
       `<strong>⚠ "${raw}" doesn't look like a valid barcode.</strong>
@@ -44,24 +49,44 @@ export async function lookupBarcode(codeOverride) {
   const isISBN = code.length === 10 ||
     (code.length === 13 && (code.startsWith('978') || code.startsWith('979')));
 
-  // 6. Try sources in priority order with overall timeout
+  const selectedType = _state.selectedType?.id || '';
+  const isMusicType  = ['cd','vinyl','cassette'].includes(selectedType);
+
+  // 6. Try sources in priority order with overall timeout.
+  //    Fire book/music sources in parallel buckets to reduce latency.
   let result = null;
   try {
-    // Wrap entire lookup chain in a 15-second timeout
     const lookupPromise = (async () => {
+      // ── For ISBNs: try book databases first ────────────────
       if (isISBN) {
         result = await _lookupOpenLibrary(code);
         if (!result) result = await _lookupGoogleBooks(code);
         if (!result) result = await _lookupInternetArchive(code);
       }
+
+      // ── For music types: try MusicBrainz first ─────────────
+      if (isMusicType) {
+        result = await _lookupMusicBrainz(code);
+      }
+
+      // ── Universal fallback: UPCitemdb ──────────────────────
       if (!result) result = await _lookupUPCitemdb(code);
-      if (!result && !isISBN) result = await _lookupInternetArchive(code);
+
+      // ── If still not found and not ISBN/not music: IA ──────
+      if (!result && !isISBN && !isMusicType) {
+        result = await _lookupInternetArchive(code);
+      }
+
       return result;
     })();
-    const timeoutPromise = new Promise((_, rej) => setTimeout(() => rej(new Error('Lookup timeout')), 15000));
+
+    // 12-second overall timeout for the entire chain
+    const timeoutPromise = new Promise((_, rej) =>
+      setTimeout(() => rej(new Error('Lookup timeout')), 12000)
+    );
     result = await Promise.race([lookupPromise, timeoutPromise]);
   } catch (e) {
-    console.warn('[lookup] chain timeout or error:', e);
+    console.warn('[lookup] chain timeout or error:', e.message);
     result = null;
   }
 
@@ -77,7 +102,6 @@ export async function lookupBarcode(codeOverride) {
     );
     setTimeout(() => {
       switchTab('manual-tab', 'add');
-      // Pre-fill whichever identifier field makes sense
       const isbnF = document.querySelector('[data-field="isbn"]');
       const catF  = document.querySelector('[data-field="catalog"]');
       if (isbnF && isISBN) isbnF.value = code;
@@ -111,8 +135,6 @@ window.applyLookupResult = applyLookupResult;
 export async function searchMediaByTitle(queryOverride) {
   const query = queryOverride || document.getElementById('cover-title-input')?.value.trim();
   if (!query) { toast('Enter a title, artist, or name to search', 'error'); return; }
-  
-  // For all media types, use book search which is generic enough via OpenLibrary
   return searchBookByTitle(query);
 }
 window.searchMediaByTitle = searchMediaByTitle;
@@ -138,8 +160,23 @@ export async function searchBookByTitle(queryOverride) {
     const url = `https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&limit=5` +
       `&fields=title,author_name,publisher,first_publish_year,isbn,cover_i,number_of_pages,subject,language`;
     const r = await _fetchWithTimeout(url, 6000);
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (!r || !r.ok) throw new Error('HTTP ' + (r?.status || 'fetch failed'));
     const data = await r.json();
+
+    // FIX: build 'merged' from docs (was previously undefined)
+    const merged = (data.docs || []).map(doc => ({
+      title:     doc.title || '',
+      author:    (doc.author_name || []).join(', '),
+      publisher: (doc.publisher || []).join(', '),
+      year:      doc.first_publish_year?.toString() || '',
+      isbn:      (doc.isbn || [])[0] || '',
+      coverUrl:  doc.cover_i
+        ? `https://covers.openlibrary.org/b/id/${doc.cover_i}-M.jpg`
+        : null,
+      pages:     doc.number_of_pages?.toString() || '',
+      language:  _langCodeToName((doc.language || [])[0] || ''),
+      subject:   (doc.subject || []).slice(0, 3).join(', '),
+    }));
 
     if (!merged.length) {
       showCoverScanStatus('no-match',
@@ -177,7 +214,7 @@ export async function searchBookByTitle(queryOverride) {
       `<strong>⚠ Search failed.</strong>
        <br><span style="font-size:12px;color:var(--text2)">Check your connection, or use Manual entry.</span>`
     );
-    console.error('[lookup] Book search error:', e);
+    console.error('[lookup] Book search error:', e.message);
   }
 }
 window.searchBookByTitle = searchBookByTitle;
@@ -189,17 +226,12 @@ export function applyCoverSearchResult(idx) {
     return;
   }
 
-  // Don't force book mode — keep the currently selected media type
-  // The user can correct the type if needed
-
   switchTab('manual-tab', 'add');
   _state.lookupResult = { ...result };
   _applyResultToForm(result);
   if (result.coverUrl) _fetchCoverAsDataUrl(result.coverUrl);
   toast('Details applied! Review and save.', 'success');
 }
-
-// Make applyCoverSearchResult available to inline onclick handlers
 window.applyCoverSearchResult = applyCoverSearchResult;
 
 // ═══════════════════════════════════════════════════════════════
@@ -211,31 +243,26 @@ window.applyCoverSearchResult = applyCoverSearchResult;
 // Returns rich data for CDs, vinyl, cassettes.
 async function _lookupMusicBrainz(barcode) {
   try {
-    // Search for release with this exact barcode
     const url  = `https://musicbrainz.org/ws/2/release/?query=barcode:${barcode}&limit=1&fmt=json`;
     const r    = await _fetchWithTimeout(url, 6000, { 'User-Agent': 'MediaNest/1.0 (collection app)' });
-    if (!r.ok) return null;
+    if (!r || !r.ok) return null;
     const data = await r.json();
 
     if (!data.releases?.length) return null;
     const rel  = data.releases[0];
 
-    // Pull artist name from the first credit slot
     const artistName = rel['artist-credit']?.[0]?.artist?.name ||
                        rel['artist-credit']?.[0]?.name || '';
 
-    // Label + catalog number
     const labelInfo  = rel['label-info']?.[0] || {};
     const labelName  = labelInfo.label?.name || '';
     const catNum     = labelInfo['catalog-number'] || '';
 
-    // Preferred cover: Cover Art Archive (CAA) front image
     const mbid     = rel.id;
     const coverUrl = mbid
       ? `https://coverartarchive.org/release/${mbid}/front-250`
       : null;
 
-    // Detect format → media type
     const format      = rel.media?.[0]?.format || '';
     const suggestedType = _mbFormatToType(format);
 
@@ -268,7 +295,7 @@ function _mbFormatToType(format) {
       f.includes('7"') || f.includes('10"') || f.includes('12"'))  return 'vinyl';
   if (f.includes('cassette') || f.includes('tape'))                 return 'cassette';
   if (f.includes('cd') || f.includes('disc'))                       return 'cd';
-  return 'cd'; // default for unrecognised music formats
+  return 'cd';
 }
 
 // ── Open Library — ISBN ───────────────────────────────────────
@@ -277,7 +304,7 @@ async function _lookupOpenLibrary(isbn) {
     const r = await _fetchWithTimeout(
       `https://openlibrary.org/api/books?bibkeys=ISBN:${isbn}&format=json&jscmd=data`, 5000
     );
-    if (!r.ok) return null;
+    if (!r || !r.ok) return null;
     const data = await r.json();
     const b    = data[`ISBN:${isbn}`];
     if (!b) return null;
@@ -286,21 +313,18 @@ async function _lookupOpenLibrary(isbn) {
       ? (b.cover.large || b.cover.medium || b.cover.small || null)
       : null;
 
-    // Clean up subject/genre data — filter out common noise and metadata
     const cleanGenres = b.subjects
       ? b.subjects
-          .slice(0, 5) // Take more initially
+          .slice(0, 5)
           .map(s => typeof s === 'string' ? s : (s.name || ''))
           .filter(s => s.length > 0)
-          // Filter out obvious metadata, OCR errors, and overly specific classifications
           .filter(s => !/^(\d+th century|Biography|Fiction|Young adult|Juvenile|Action|Adventure)$/i.test(s))
           .filter(s => !/^(Genre:|Category:|Tag:|Label:)/i.test(s))
           .filter(s => !/^(book|books|work|works|publication|document)$/i.test(s))
-          .slice(0, 3) // Take top 3 after filtering
+          .slice(0, 3)
           .join(', ')
       : '';
-    
-    // Extract language code cleanly
+
     let language = '';
     if (b.language) {
       if (typeof b.language === 'string') {
@@ -327,7 +351,7 @@ async function _lookupOpenLibrary(isbn) {
       suggestedType: 'book',
       description:  b.excerpts?.[0]?.text || '',
     };
-  } catch (e) { console.warn('OpenLibrary error:', e); return null; }
+  } catch (e) { console.warn('OpenLibrary error:', e.message); return null; }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -339,7 +363,7 @@ async function _searchOpenLibrary(query) {
     const url = `https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&limit=8` +
       `&fields=title,subtitle,author_name,publisher,first_publish_year,isbn,cover_i,number_of_pages,subject,language,edition_count,key`;
     const r = await _fetchWithTimeout(url, 7000);
-    if (!r.ok) return [];
+    if (!r || !r.ok) return [];
     const data = await r.json();
     if (!data.docs?.length) return [];
 
@@ -361,25 +385,23 @@ async function _searchOpenLibrary(query) {
       editionCount: doc.edition_count || 0,
       olKey:     doc.key || '',
     }));
-  } catch (e) { console.warn('[lookup] OL search error:', e); return []; }
+  } catch (e) { console.warn('[lookup] OL search error:', e.message); return []; }
 }
 
 // ═══════════════════════════════════════════════════════════════
 // GOOGLE BOOKS — barcode lookup
 // ═══════════════════════════════════════════════════════════════
 
-// ── Google Books — ISBN ───────────────────────────────────────
 async function _lookupGoogleBooks(isbn) {
   try {
     const r = await _fetchWithTimeout(`https://www.googleapis.com/books/v1/volumes?q=isbn:${isbn}`, 4000);
-    if (!r.ok) return null;
+    if (!r || !r.ok) return null;
     const data = await r.json();
     if (!data.items?.length) return null;
-    
+
     const book = data.items[0].volumeInfo;
     if (!book) return null;
 
-    // Extract genres/subjects — Google Books may have better categorization
     const genres = [];
     if (book.categories) {
       genres.push(...book.categories.slice(0, 2));
@@ -389,11 +411,9 @@ async function _lookupGoogleBooks(isbn) {
     }
     const genreStr = genres.filter(g => g && g.length > 0).slice(0, 3).join(', ');
 
-    // Extract language code
     let language = '';
     if (book.language) {
       language = book.language.toUpperCase();
-      // Convert language codes (e.g., 'en' → 'EN', 'es' → 'ES')
       if (language.length === 2) {
         const langMap = { en: 'ENGLISH', es: 'SPANISH', fr: 'FRENCH', de: 'GERMAN', it: 'ITALIAN', pt: 'PORTUGUESE', nl: 'DUTCH', pl: 'POLISH', ru: 'RUSSIAN', zh: 'CHINESE', ja: 'JAPANESE', ko: 'KOREAN' };
         language = langMap[language.toLowerCase()] || language;
@@ -414,24 +434,22 @@ async function _lookupGoogleBooks(isbn) {
       suggestedType: 'book',
       description:  book.description || '',
     };
-  } catch (e) { console.warn('Google Books error:', e); return null; }
+  } catch (e) { console.warn('Google Books error:', e.message); return null; }
 }
 
 // ═══════════════════════════════════════════════════════════════
 // INTERNET ARCHIVE — barcode lookup
 // ═══════════════════════════════════════════════════════════════
 
-// ── Internet Archive ──────────────────────────────────────────
 async function _lookupInternetArchive(code) {
   try {
     const r = await _fetchWithTimeout(`https://archive.org/metadata/isbn_${code}`, 4000);
-    if (!r.ok) return null;
+    if (!r || !r.ok) return null;
     const data = await r.json();
     if (!data.metadata) return null;
     const m   = data.metadata;
     const val = v => Array.isArray(v) ? v[0] : (v || '');
 
-    // IA sometimes has subject data
     const rawSubjects = Array.isArray(m.subject) ? m.subject : (m.subject ? [m.subject] : []);
     const genre = _cleanSubjects(rawSubjects, 3);
 
@@ -447,20 +465,17 @@ async function _lookupInternetArchive(code) {
       suggestedType: 'book',
       description:  val(m.description) || '',
     };
-  } catch (e) { console.warn('InternetArchive error:', e); return null; }
+  } catch (e) { console.warn('InternetArchive error:', e.message); return null; }
 }
 
 // ═══════════════════════════════════════════════════════════════
 // UPCITEMDB — generic UPC lookup
 // ═══════════════════════════════════════════════════════════════
 
-// ── UPCitemdb — universal product DB ─────────────────────────
-// 100 req/day free (no key needed for the trial endpoint).
-// Covers video games, DVDs, music, books, and general products.
 async function _lookupUPCitemdb(upc) {
   try {
     const r = await _fetchWithTimeout(`https://api.upcitemdb.com/prod/trial/lookup?upc=${upc}`, 5000);
-    if (!r.ok) return null;
+    if (!r || !r.ok) return null;
     const data = await r.json();
     if (data.code !== 'OK' || !data.items?.length) return null;
 
@@ -486,24 +501,27 @@ async function _lookupUPCitemdb(upc) {
       suggestedType,
       upc,
     };
-  } catch (e) { console.warn('UPCitemdb error:', e); return null; }
+  } catch (e) { console.warn('UPCitemdb error:', e.message); return null; }
 }
 
 // ═══════════════════════════════════════════════════════════════
-// MUSICBRAINZ — fallback music search
+// FETCH WITH TIMEOUT (fixed — returns null on error, not [])
 // ═══════════════════════════════════════════════════════════════
 
-// Wraps fetch with a timeout using AbortController (compatible with all modern browsers)
-async function _fetchWithTimeout(url, ms = 7000) {
+async function _fetchWithTimeout(url, ms = 7000, extraHeaders = {}) {
   const ctrl    = new AbortController();
   const timerId = setTimeout(() => ctrl.abort(), ms);
   try {
-    const r = await fetch(url, { signal: ctrl.signal });
+    const r = await fetch(url, {
+      signal: ctrl.signal,
+      headers: { ...extraHeaders },
+    });
     clearTimeout(timerId);
     return r;
   } catch (e) {
-    console.warn('[lookup] MusicBrainz search error:', e);
-    return [];
+    clearTimeout(timerId);
+    console.warn('[lookup] fetch timeout/error:', url.split('?')[0].substring(0, 40) + '…', e.message);
+    return null; // ← FIXED: was returning [] which broke callers
   }
 }
 
@@ -511,7 +529,6 @@ async function _fetchWithTimeout(url, ms = 7000) {
 // HELPERS
 // ═══════════════════════════════════════════════════════════════
 
-// Merge book search results, de-duplicating by title+author
 function _mergeBookResults(olResults, gbResults) {
   const seen = new Set();
   const out = [];
@@ -526,7 +543,6 @@ function _mergeBookResults(olResults, gbResults) {
   return out.slice(0, 8);
 }
 
-// Language code → readable name
 function _langCodeToName(code) {
   if (!code) return '';
   const clean = code.replace('/languages/', '').toLowerCase().trim();
@@ -556,7 +572,6 @@ function _langCodeToName(code) {
   return MAP[clean] || code.toUpperCase();
 }
 
-// Clean and deduplicate subject tags
 const _SUBJECT_NOISE = new RegExp(
   '^(fiction|nonfiction|non-fiction|juvenile|young adult|biography|autobiography|' +
   'general|miscellaneous|protected daisy|accessible book|large print|' +
@@ -571,10 +586,7 @@ function _cleanSubjects(rawArr, max = 4) {
   const seen = new Set();
   return rawArr
     .filter(s => typeof s === 'string' && s.length > 1)
-    .map(s => {
-      // Capitalize each word and trim
-      return s.trim().replace(/\b\w/g, c => c.toUpperCase());
-    })
+    .map(s => s.trim().replace(/\b\w/g, c => c.toUpperCase()))
     .filter(s => !_SUBJECT_NOISE.test(s.toLowerCase()))
     .filter(s => {
       const k = s.toLowerCase();
@@ -586,7 +598,6 @@ function _cleanSubjects(rawArr, max = 4) {
     .join(', ');
 }
 
-// Render the found item card in the scan results area
 function _renderLookupResult(result, code) {
   const thumbHtml = result.coverUrl
     ? `<img src="${result.coverUrl}" alt="${result.title || result.album}" style="width:100%;height:100%;object-fit:cover" onerror="this.parentElement.innerHTML='📦'">`
@@ -608,7 +619,6 @@ function _renderLookupResult(result, code) {
   );
 }
 
-// Populate the manual form fields from a lookup/search result
 function _applyResultToForm(result) {
   const fieldMap = {
     title:'title', author:'author', publisher:'publisher', pub_year:'pub_year',
@@ -629,7 +639,7 @@ function _applyResultToForm(result) {
 async function _fetchCoverAsDataUrl(url) {
   try {
     const res    = await fetch(url);
-    if (!res.ok) return; // cover not found (e.g. CAA 404)
+    if (!res.ok) return;
     const blob   = await res.blob();
     const reader = new FileReader();
     reader.onload = ev => {
@@ -638,8 +648,7 @@ async function _fetchCoverAsDataUrl(url) {
       if (cp) cp.innerHTML = `<img src="${ev.target.result}" style="width:100%;height:100%;object-fit:cover">`;
     };
     reader.readAsDataURL(blob);
-  } catch (_) { /* non-fatal: cover fetch failed silently */ }
+  } catch (_) { /* non-fatal */ }
 }
 
-// Expose to global scope for inline onclick handlers
 window.applyLookupResult = applyLookupResult;

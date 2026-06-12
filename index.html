@@ -22,8 +22,9 @@
   <div class="nav-links">
     <button class="nav-btn active" id="nb-home"       onclick="window.goToView('home')">Home</button>
     <button class="nav-btn"        id="nb-collection"  onclick="window.goToView('collection')" style="display:none">Collection</button>
-    <button class="nav-btn"        id="nb-discover"    onclick="window.goToView('discover')">Discover</button>
-    <button class="nav-btn"        id="nb-trade"       onclick="window.goToView('trade')" style="display:none">Trading</button>
+      <button class="nav-btn"        id="nb-artists"     onclick="window.goToView('artists')">Artists</button>
+      <button class="nav-btn"        id="nb-discover"    onclick="window.goToView('discover')">Discover</button>
+      <button class="nav-btn"        id="nb-trade"       onclick="window.goToView('trade')" style="display:none">Trading</button>
   </div>
 
   <!-- Desktop actions -->
@@ -51,6 +52,7 @@
 <div class="mobile-drawer" id="mobile-drawer">
   <button class="nav-btn" id="mbnb-home"       onclick="window.goToView('home');window.closeMobileDrawer()">🏠 Home</button>
   <button class="nav-btn" id="mbnb-collection" onclick="window.goToView('collection');window.closeMobileDrawer()" style="display:none">📦 Collection</button>
+  <button class="nav-btn" id="mbnb-artists"     onclick="window.goToView('artists');window.closeMobileDrawer()">🎨 Artists</button>
   <button class="nav-btn"                       onclick="window.goToView('discover');window.closeMobileDrawer()">🔍 Discover</button>
   <button class="nav-btn" id="mbnb-trade"       onclick="window.goToView('trade');window.closeMobileDrawer()" style="display:none">💬 Trading</button>
   <div class="mobile-drawer-divider"></div>
@@ -227,6 +229,26 @@
       </div>
     </div>
     <div class="col-grid" id="discover-grid"></div>
+  </div>
+</div>
+
+<!-- ARTISTS -->
+<div class="page" id="page-artists">
+  <div class="container section">
+    <div class="section-header">
+      <div>
+        <div class="section-title serif">Artists & Creators</div>
+        <div class="section-sub">Browse your collection grouped by artist, author, or creator</div>
+      </div>
+    </div>
+    <div style="margin-bottom:16px">
+      <div class="search-input">
+        <span class="search-icon">🔍</span>
+        <input class="form-input" id="artist-search" placeholder="Search artists…" oninput="window.filterArtists()">
+      </div>
+    </div>
+    <div id="artist-grid" class="artist-grid"></div>
+    <div id="artist-detail" style="display:none"></div>
   </div>
 </div>
 
