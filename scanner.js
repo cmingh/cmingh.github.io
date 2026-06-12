@@ -1,13 +1,13 @@
-// js/scanner.js  (v3 — robust multi-engine barcode detection)
+// js/scanner.js  (v4 — zxing-wasm C++ engine, reliable barcode detection)
 // ─────────────────────────────────────────────────────────────
 // Decode pipeline for static images:
-//   1. Native BarcodeDetector  (Chrome/Edge 83+, Android WebView)
-//   2. ZXing via blob URL      (decodeFromImageUrl — the reliable path)
-//   3. ZXing multi-attempt     (preprocessed crops, contrast, threshold)
+//   1. zxing-wasm  (ZXing C++ compiled to WebAssembly — same engine as
+//                  onlinebarcodereader.com; most reliable browser decoder)
+//   2. Native BarcodeDetector  (Chrome/Edge 83+, Android WebView)
 //
 // Live camera:
-//   1. Native BarcodeDetector per-frame
-//   2. ZXing canvas fallback per-frame
+//   1. Native BarcodeDetector per-frame (fastest when available)
+//   2. zxing-wasm per-frame fallback
 //
 // Cover OCR:
 //   Tesseract.js v4 with correct load/loadLanguage/initialize sequence.
@@ -15,68 +15,173 @@
 
 import { _state } from './state.js';
 import { toast, switchTab } from './ui.js';
-import { lookupBarcode, searchBookByTitle, searchMediaByTitle } from './lookup.js';
+import { lookupBarcode, searchMediaByTitle } from './lookup.js';
 
 // ── Camera state ──────────────────────────────────────────────
 let _cameraStream  = null;
 let _cameraRunning = false;
 
-// ── ZXing reader singleton ────────────────────────────────────
-let _zxingReader   = null;    // BrowserMultiFormatReader instance
-let _zxingLoaded   = false;
+// ── zxing-wasm state ──────────────────────────────────────────
+// We load the IIFE build once and reuse it.
+// ZXingWASM global is set after load; readBarcodesFromImageFile and
+// readBarcodesFromImageData are destructured from it.
+let _zxingWasmReady = false;
+let _zxingWasmLoading = false;
+let _zxingWasmLoadCallbacks = [];
 
 // ─────────────────────────────────────────────────────────────
-// ZXing loader  — we keep the existing script tag from index.html
-// (ZXing 0.19.1 UMD) but use decodeFromImageUrl instead of
-// decodeFromCanvas to get reliable decoding.
+// zxing-wasm loader
+// Uses the IIFE CDN build which exposes window.ZXingWASM.
+// The .wasm binary is served from the same CDN automatically.
 // ─────────────────────────────────────────────────────────────
-async function _getZxingReader() {
-  if (_zxingReader) return _zxingReader;
+async function _ensureZxingWasm() {
+  if (_zxingWasmReady) return true;
 
-  // ZXing may already be loaded from the index.html <script> tag
-  if (!window.ZXing) {
-    await new Promise((res, rej) => {
-      const s   = document.createElement('script');
-      s.src     = 'https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js';
-      s.onload  = res;
-      s.onerror = rej;
-      document.head.appendChild(s);
-    });
+  // If already loading, wait for it
+  if (_zxingWasmLoading) {
+    return new Promise(resolve => _zxingWasmLoadCallbacks.push(resolve));
   }
 
-  const hints = new Map();
-  // TRY_HARDER is essential for real-world photos.
-  hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-  // Also try inverted barcodes/contrast variants.
-  hints.set(ZXing.DecodeHintType.ALSO_INVERTED, true);
-  // All 1-D retail formats.
-  hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-    ZXing.BarcodeFormat.EAN_13,
-    ZXing.BarcodeFormat.EAN_8,
-    ZXing.BarcodeFormat.UPC_A,
-    ZXing.BarcodeFormat.UPC_E,
-    ZXing.BarcodeFormat.CODE_128,
-    ZXing.BarcodeFormat.CODE_39,
-    ZXing.BarcodeFormat.ITF,
-  ]);
+  _zxingWasmLoading = true;
 
-  _zxingReader = new ZXing.BrowserMultiFormatReader(hints);
-  _zxingLoaded = true;
-  return _zxingReader;
+  try {
+    await new Promise((res, rej) => {
+      // Load the IIFE reader build — exposes window.ZXingWASM
+      const s = document.createElement('script');
+      // Version 3.x IIFE reader bundle — ~830 KB wasm, full C++ accuracy
+      s.src = 'https://cdn.jsdelivr.net/npm/zxing-wasm@3.0.2/dist/iife/reader/index.js';
+      s.onload = res;
+      s.onerror = () => {
+        // Fallback to unpkg if jsdelivr is slow
+        const s2 = document.createElement('script');
+        s2.src = 'https://unpkg.com/zxing-wasm@3.0.2/dist/iife/reader/index.js';
+        s2.onload = res;
+        s2.onerror = () => rej(new Error('zxing-wasm CDN load failed'));
+        document.head.appendChild(s2);
+      };
+      document.head.appendChild(s);
+    });
+
+    // Verify the global is available
+    if (!window.ZXingWASM?.readBarcodesFromImageFile) {
+      throw new Error('ZXingWASM global not found after script load');
+    }
+
+    _zxingWasmReady = true;
+    _zxingWasmLoadCallbacks.forEach(cb => cb(true));
+    _zxingWasmLoadCallbacks = [];
+    console.log('[scanner] zxing-wasm loaded successfully');
+    return true;
+  } catch (e) {
+    console.error('[scanner] zxing-wasm load failed:', e.message);
+    _zxingWasmLoadCallbacks.forEach(cb => cb(false));
+    _zxingWasmLoadCallbacks = [];
+    return false;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
-// MASTER DECODE — tries every engine in order
+// Read options for zxing-wasm — covers all common retail formats
+// ─────────────────────────────────────────────────────────────
+const ZXING_READ_OPTIONS = {
+  formats: [
+    'EAN-13', 'EAN-8', 'UPC-A', 'UPC-E',
+    'Code128', 'Code39', 'Code93',
+    'ITF', 'Codabar',
+    'DataMatrix', 'QRCode', 'PDF417', 'Aztec',
+  ],
+  tryHarder: true,           // additional processing passes for real-world photos
+  tryRotate: true,           // try rotated variants
+  tryInvert: true,           // try inverted barcodes
+  tryDownscale: true,        // try downscaled versions
+  maxNumberOfSymbols: 1,     // we only need the first one
+};
+
+// ─────────────────────────────────────────────────────────────
+// Decode from a Blob (the most direct zxing-wasm path)
+// readBarcodesFromImageFile accepts Blob/File directly — no canvas needed.
+// ─────────────────────────────────────────────────────────────
+async function _decodeWithZxingWasm(blob) {
+  const loaded = await _ensureZxingWasm();
+  if (!loaded || !window.ZXingWASM?.readBarcodesFromImageFile) return null;
+
+  try {
+    const results = await window.ZXingWASM.readBarcodesFromImageFile(blob, ZXING_READ_OPTIONS);
+    if (results && results.length > 0 && results[0].text) {
+      return results[0].text;
+    }
+  } catch (e) {
+    console.warn('[scanner] zxing-wasm readBarcodesFromImageFile failed:', e.message);
+  }
+  return null;
+}
+
+// Decode from ImageData (for canvas frames — live camera)
+async function _decodeWithZxingWasmImageData(imageData) {
+  const loaded = await _ensureZxingWasm();
+  if (!loaded || !window.ZXingWASM?.readBarcodesFromImageData) return null;
+
+  try {
+    const results = await window.ZXingWASM.readBarcodesFromImageData(imageData, ZXING_READ_OPTIONS);
+    if (results && results.length > 0 && results[0].text) {
+      return results[0].text;
+    }
+  } catch (e) {
+    console.warn('[scanner] zxing-wasm readBarcodesFromImageData failed:', e.message);
+  }
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Convert a data URL to a Blob (needed for zxing-wasm file API)
+// ─────────────────────────────────────────────────────────────
+function _dataUrlToBlob(dataUrl) {
+  try {
+    const [header, b64] = dataUrl.split(',');
+    const mime = header.match(/:(.*?);/)[1];
+    const bin  = atob(b64);
+    const arr  = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return new Blob([arr], { type: mime });
+  } catch (e) {
+    console.warn('[scanner] dataUrl→Blob conversion failed:', e);
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// MASTER DECODE — tries zxing-wasm first, then native BarcodeDetector
 // Returns the barcode string or null.
 // ─────────────────────────────────────────────────────────────
 async function _decodeBarcodeFromDataUrl(dataUrl) {
+  // ── Engine 1: zxing-wasm (ZXing C++ — most accurate) ──────
+  // Feed the image directly as a Blob — no canvas intermediary,
+  // no quality loss from re-encoding, no size limits.
+  const blob = _dataUrlToBlob(dataUrl);
+  if (blob) {
+    try {
+      const code = await Promise.race([
+        _decodeWithZxingWasm(blob),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('zxing-wasm timeout')), 15000)),
+      ]);
+      if (code) {
+        console.log('[scanner] zxing-wasm hit:', code);
+        return code;
+      }
+    } catch (e) {
+      if (!e.message?.includes('timeout')) {
+        console.warn('[scanner] zxing-wasm error:', e.message);
+      }
+    }
+  }
 
-  // ── Engine 1: Native BarcodeDetector ─────────────────────
-  // Fastest, most reliable when available (Chrome/Edge 83+, Android)
+  // ── Engine 2: Native BarcodeDetector (Chrome/Edge 83+) ────
+  // Fast and built-in when available; use as a fallback in case
+  // zxing-wasm didn't load (network failure etc.)
   if (window.BarcodeDetector) {
     try {
       const detector = new BarcodeDetector({
-        formats: ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf'],
+        formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'itf', 'qr_code', 'data_matrix', 'pdf417', 'aztec'],
       });
       const img    = await _dataUrlToImage(dataUrl);
       const bitmap = await createImageBitmap(img);
@@ -87,109 +192,7 @@ async function _decodeBarcodeFromDataUrl(dataUrl) {
         return codes[0].rawValue;
       }
     } catch (e) {
-      console.warn('[scanner] BarcodeDetector failed:', e.message);
-    }
-  }
-
-  // ── Engine 2: ZXing via blob URL (most reliable ZXing path) ──
-  // decodeFromImageUrl works correctly; decodeFromCanvas does NOT
-  // reliably in many browser/ZXing version combinations.
-  let blobUrl = null;
-  try {
-    const reader = await _getZxingReader();
-    blobUrl = await _dataUrlToBlobUrl(dataUrl);
-    const result = await Promise.race([
-      reader.decodeFromImageUrl(blobUrl),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('ZXing timeout')), 6000)),
-    ]);
-    if (result?.getText()) {
-      console.log('[scanner] ZXing blob URL hit:', result.getText());
-      return result.getText();
-    }
-  } catch (e) {
-    if (!e.message?.includes('No MultiFormat') && !e.message?.includes('timeout')) {
-      console.warn('[scanner] ZXing blob URL error:', e.message);
-    }
-  } finally {
-    if (blobUrl) URL.revokeObjectURL(blobUrl);
-  }
-
-  // ── Engine 2b: ZXing canvas fallback for very clean / high-res images ─
-  try {
-    const reader = await _getZxingReader();
-    const img = await _dataUrlToImage(dataUrl);
-    const scale = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.round(img.naturalWidth * scale);
-    canvas.height = Math.round(img.naturalHeight * scale);
-    const ctx = canvas.getContext('2d');
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    const result = await reader.decodeFromCanvas(canvas);
-    if (result?.getText()) {
-      console.log('[scanner] ZXing canvas fallback hit:', result.getText());
-      return result.getText();
-    }
-  } catch (e) {
-    if (!e.message?.includes('No MultiFormat')) {
-      console.warn('[scanner] ZXing canvas fallback error:', e.message);
-    }
-  }
-
-  // ── Engine 3: ZXing multi-attempt with preprocessing ─────
-  // For real-world photos: try different crops, contrast boost,
-  // binarization, and upscaling to find the barcode.
-  try {
-    const result = await _zxingMultiAttempt(dataUrl);
-    if (result) {
-      console.log('[scanner] ZXing multi-attempt hit:', result);
-      return result;
-    }
-  } catch (e) {
-    console.warn('[scanner] ZXing multi-attempt error:', e.message);
-  }
-
-  return null;
-}
-
-// ─────────────────────────────────────────────────────────────
-// ZXing multi-attempt — tries preprocessed canvas variants
-// ─────────────────────────────────────────────────────────────
-async function _zxingMultiAttempt(dataUrl) {
-  const reader = await _getZxingReader();
-  const img    = await _dataUrlToImage(dataUrl);
-  const W = img.naturalWidth, H = img.naturalHeight;
-
-  // Regions to try: [x, y, w, h] as fractions of image dimensions
-  const regions = [
-    [0,   0,   1,   1  ],  // full image
-    [0,   0.5, 1,   0.5],  // bottom half  (most barcodes on back covers)
-    [0,   0.6, 0.5, 0.4],  // bottom-left
-    [0.5, 0.6, 0.5, 0.4],  // bottom-right
-    [0.1, 0.1, 0.8, 0.8],  // center crop
-    [0,   0.7, 1,   0.3],  // bottom strip
-  ];
-
-  // Preprocessing modes applied to each region
-  const modes = ['original', 'contrast', 'threshold'];
-
-  for (const [rx, ry, rw, rh] of regions) {
-    for (const mode of modes) {
-      const canvas = _buildProcessedCanvas(img, W, H, rx, ry, rw, rh, mode);
-      // Try at multiple scales for small, high-res and very clear barcodes.
-      for (const scale of [0.75, 1, 2, 3]) {
-        let blobUrl2 = null;
-        try {
-          const scaled = _scaleCanvas(canvas, scale);
-          blobUrl2 = await _canvasToBlobUrl(scaled);
-          const result = await Promise.race([
-            reader.decodeFromImageUrl(blobUrl2),
-            new Promise((_, rej) => setTimeout(() => rej(new Error('t/o')), 3000)),
-          ]);
-          if (result?.getText()) return result.getText();
-        } catch (_) { /* try next */ }
-        finally { if (blobUrl2) URL.revokeObjectURL(blobUrl2); }
-      }
+      console.warn('[scanner] BarcodeDetector fallback failed:', e.message);
     }
   }
 
@@ -197,85 +200,8 @@ async function _zxingMultiAttempt(dataUrl) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Canvas preprocessing helpers
+// Image helper
 // ─────────────────────────────────────────────────────────────
-
-function _buildProcessedCanvas(img, W, H, rx, ry, rw, rh, mode) {
-  const sw = Math.round(W * rw), sh = Math.round(H * rh);
-  const sx = Math.round(W * rx), sy = Math.round(H * ry);
-
-  const canvas = document.createElement('canvas');
-  canvas.width  = sw;
-  canvas.height = sh;
-  const ctx = canvas.getContext('2d');
-
-  // Draw the selected region
-  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
-
-  if (mode === 'original') return canvas;
-
-  const imageData = ctx.getImageData(0, 0, sw, sh);
-  const data      = imageData.data;
-
-  if (mode === 'contrast') {
-    // Convert to grayscale + stretch histogram
-    let minL = 255, maxL = 0;
-    for (let i = 0; i < data.length; i += 4) {
-      const g = Math.round(0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2]);
-      if (g < minL) minL = g;
-      if (g > maxL) maxL = g;
-    }
-    const range = maxL - minL || 1;
-    for (let i = 0; i < data.length; i += 4) {
-      const g  = Math.round(0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2]);
-      const gs = Math.round(((g - minL) / range) * 255);
-      data[i] = data[i+1] = data[i+2] = gs;
-    }
-  } else if (mode === 'threshold') {
-    // Otsu-like binarization — great for crisp barcode lines
-    const hist = new Array(256).fill(0);
-    for (let i = 0; i < data.length; i += 4) {
-      const g = Math.round(0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2]);
-      hist[g]++;
-    }
-    const total = sw * sh;
-    let sum = 0;
-    for (let t = 0; t < 256; t++) sum += t * hist[t];
-    let sumB = 0, wB = 0, maxVar = 0, threshold = 128;
-    for (let t = 0; t < 256; t++) {
-      wB += hist[t]; if (!wB) continue;
-      const wF = total - wB; if (!wF) break;
-      sumB += t * hist[t];
-      const mB = sumB / wB, mF = (sum - sumB) / wF;
-      const varBetween = wB * wF * (mB - mF) ** 2;
-      if (varBetween > maxVar) { maxVar = varBetween; threshold = t; }
-    }
-    for (let i = 0; i < data.length; i += 4) {
-      const g  = Math.round(0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2]);
-      const bw = g > threshold ? 255 : 0;
-      data[i] = data[i+1] = data[i+2] = bw;
-    }
-  }
-
-  ctx.putImageData(imageData, 0, 0);
-  return canvas;
-}
-
-function _scaleCanvas(src, scale) {
-  if (scale === 1) return src;
-  const dst = document.createElement('canvas');
-  dst.width  = Math.max(1, Math.round(src.width  * scale));
-  dst.height = Math.max(1, Math.round(src.height * scale));
-  const ctx  = dst.getContext('2d');
-  ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(src, 0, 0, dst.width, dst.height);
-  return dst;
-}
-
-// ─────────────────────────────────────────────────────────────
-// URL / Image helpers
-// ─────────────────────────────────────────────────────────────
-
 function _dataUrlToImage(dataUrl) {
   return new Promise((res, rej) => {
     const img = new Image();
@@ -285,34 +211,11 @@ function _dataUrlToImage(dataUrl) {
   });
 }
 
-function _dataUrlToBlobUrl(dataUrl) {
-  return new Promise((res, rej) => {
-    try {
-      const [header, b64] = dataUrl.split(',');
-      const mime = header.match(/:(.*?);/)[1];
-      const bin  = atob(b64);
-      const arr  = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-      const blob = new Blob([arr], { type: mime });
-      res(URL.createObjectURL(blob));
-    } catch (e) { rej(e); }
-  });
-}
-
-function _canvasToBlobUrl(canvas) {
-  return new Promise((res, rej) => {
-    canvas.toBlob(blob => {
-      if (!blob) { rej(new Error('toBlob failed')); return; }
-      res(URL.createObjectURL(blob));
-    }, 'image/png');
-  });
-}
-
 // ─────────────────────────────────────────────────────────────
 // PUBLIC: decode a data URL and trigger lookup
 // ─────────────────────────────────────────────────────────────
 async function _decodeAndLookup(dataUrl) {
-  showScanStatus('loading', '<span class="spin">⏳</span> Scanning barcode (trying multiple methods)…');
+  showScanStatus('loading', '<span class="spin">⏳</span> Scanning barcode…');
 
   const code = await _decodeBarcodeFromDataUrl(dataUrl);
 
@@ -329,12 +232,12 @@ async function _decodeAndLookup(dataUrl) {
     try {
       await Promise.race([
         lookupBarcode(code),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 12000)),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 15000)),
       ]);
     } catch (_) {
       showScanStatus('no-match',
         `<strong>⚠ Lookup timed out for <span class="mono">${code}</span>.</strong>
-         <br><span style="color:var(--text2);font-size:12px">The barcode was read correctly — try typing it in the field below and pressing Look up.</span>`
+         <br><span style="color:var(--text2);font-size:12px">The barcode was read — try typing it in the field below and pressing Look up.</span>`
       );
     }
   } else {
@@ -360,11 +263,16 @@ export async function startCamera() {
 
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      video: {
+        facingMode: { ideal: 'environment' },
+        width:  { ideal: 1280 },
+        height: { ideal: 720 },
+      },
     });
     _cameraStream = stream;
 
     const video = document.getElementById('camera-video');
+    if (!video) { stream.getTracks().forEach(t => t.stop()); return; }
     video.srcObject = stream;
     await video.play();
 
@@ -376,10 +284,14 @@ export async function startCamera() {
 
     _cameraRunning = true;
     toast('Camera active — point at a barcode', 'success');
+
+    // Warm up zxing-wasm in background while user positions the barcode
+    _ensureZxingWasm().catch(() => {});
+
     _startLiveScan();
   } catch (e) {
     toast('Camera access denied or unavailable', 'error');
-    console.error('Camera error:', e);
+    console.error('[scanner] Camera error:', e);
   }
 }
 
@@ -419,58 +331,56 @@ export async function captureFrame() {
 }
 
 // ── Live scan loop ────────────────────────────────────────────
+// Strategy: prefer native BarcodeDetector (synchronous, low overhead).
+// If unavailable, use zxing-wasm via ImageData (also good for live video).
+// Run at ~4 fps to keep the device cool.
 function _startLiveScan() {
   const video  = document.getElementById('camera-video');
   const canvas = document.createElement('canvas');
+  let   useNativeDetector = !!window.BarcodeDetector;
+  let   nativeDetector    = null;
 
-  // Prefer native BarcodeDetector for live video (much faster)
-  const useNative = !!window.BarcodeDetector;
-  let detector   = null;
-  let zxingReader = null;
-
-  (async () => {
-    if (useNative) {
-      try {
-        detector = new BarcodeDetector({
-          formats: ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf'],
-        });
-      } catch (_) { /* fallback to ZXing below */ }
+  // Try to create native detector up front
+  if (useNativeDetector) {
+    try {
+      nativeDetector = new BarcodeDetector({
+        formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'itf', 'qr_code'],
+      });
+    } catch (_) {
+      useNativeDetector = false;
     }
-    if (!detector) {
-      try { zxingReader = await _getZxingReader(); } catch (_) {}
-    }
-  })();
+  }
 
   const tick = async () => {
-    if (!_cameraRunning || !video?.videoWidth) {
-      if (_cameraRunning) setTimeout(() => requestAnimationFrame(tick), 100);
+    if (!_cameraRunning) return;
+    if (!video?.videoWidth || video.readyState < 2) {
+      setTimeout(() => requestAnimationFrame(tick), 150);
       return;
     }
 
     canvas.width  = video.videoWidth;
     canvas.height = video.videoHeight;
-    canvas.getContext('2d').drawImage(video, 0, 0);
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0);
 
     let code = null;
 
     try {
-      if (detector) {
+      if (useNativeDetector && nativeDetector) {
+        // Native BarcodeDetector — fastest path
         const bitmap = await createImageBitmap(canvas);
-        const codes  = await detector.detect(bitmap);
+        const codes  = await nativeDetector.detect(bitmap);
         bitmap.close();
         if (codes?.length) code = codes[0].rawValue;
-      } else if (zxingReader) {
-        let blobUrl3 = null;
-        try {
-          blobUrl3 = await _canvasToBlobUrl(canvas);
-          const r  = await Promise.race([
-            zxingReader.decodeFromImageUrl(blobUrl3),
-            new Promise((_, rej) => setTimeout(() => rej(new Error('t/o')), 800)),
-          ]);
-          code = r?.getText() || null;
-        } catch (_) {} finally { if (blobUrl3) URL.revokeObjectURL(blobUrl3); }
+      } else if (_zxingWasmReady) {
+        // zxing-wasm ImageData path
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        code = await Promise.race([
+          _decodeWithZxingWasmImageData(imageData),
+          new Promise(res => setTimeout(() => res(null), 800)),
+        ]);
       }
-    } catch (_) {}
+    } catch (_) { /* keep scanning */ }
 
     if (code) {
       _cameraRunning = false;
@@ -488,10 +398,11 @@ function _startLiveScan() {
       return;
     }
 
-    if (_cameraRunning) setTimeout(() => requestAnimationFrame(tick), 200); // ~5 fps
+    if (_cameraRunning) setTimeout(() => requestAnimationFrame(tick), 250); // ~4 fps
   };
 
-  setTimeout(() => requestAnimationFrame(tick), 800); // let video stabilise
+  // Let the video stabilise before scanning
+  setTimeout(() => requestAnimationFrame(tick), 800);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -512,17 +423,101 @@ export function handleScanFile(e) {
 }
 
 export function processScanFile(file) {
-  const reader = new FileReader();
-  reader.onload = async ev => {
-    const dataUrl = ev.target.result;
-    const img = document.getElementById('scan-preview-img');
-    if (img) { img.src = dataUrl; img.style.display = ''; }
-    _state.editingItem._coverData = null;
-    const resultEl = document.getElementById('scan-result');
-    if (resultEl) resultEl.style.display = '';
-    await _decodeAndLookup(dataUrl);
-  };
-  reader.readAsDataURL(file);
+  // Show preview immediately while we decode
+  const objectUrl = URL.createObjectURL(file);
+  const imgEl = document.getElementById('scan-preview-img');
+  if (imgEl) {
+    imgEl.src = objectUrl;
+    imgEl.style.display = '';
+    imgEl.onload = () => URL.revokeObjectURL(objectUrl);
+  }
+
+  const resultEl = document.getElementById('scan-result');
+  if (resultEl) resultEl.style.display = '';
+
+  showScanStatus('loading', '<span class="spin">⏳</span> Scanning barcode…');
+
+  // Warm up zxing-wasm (no-op if already loaded)
+  _ensureZxingWasm().then(loaded => {
+    if (!loaded) {
+      // zxing-wasm failed to load, fall back to data-URL path with BarcodeDetector
+      const reader = new FileReader();
+      reader.onload = async ev => {
+        _state.editingItem._coverData = null;
+        await _decodeAndLookup(ev.target.result);
+      };
+      reader.readAsDataURL(file);
+      return;
+    }
+
+    // Preferred path: pass Blob directly to zxing-wasm (no quality loss)
+    _decodeWithZxingWasm(file).then(async code => {
+      if (code) {
+        const manualEl = document.getElementById('barcode-manual');
+        if (manualEl) manualEl.value = code;
+
+        showScanStatus('matched',
+          `<strong>✓ Barcode detected:</strong> <span class="mono" style="color:var(--accent)">${code}</span>
+           <br><span style="color:var(--text2);font-size:12px;display:block;margin-top:4px">Looking up item details…</span>`
+        );
+        toast('Barcode read: ' + code, 'success');
+
+        try {
+          await Promise.race([
+            lookupBarcode(code),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 15000)),
+          ]);
+        } catch (_) {
+          showScanStatus('no-match',
+            `<strong>⚠ Lookup timed out for <span class="mono">${code}</span>.</strong>
+             <br><span style="color:var(--text2);font-size:12px">Barcode was read correctly — type it below and press Look up.</span>`
+          );
+        }
+      } else {
+        // zxing-wasm returned nothing — try BarcodeDetector via data URL
+        const reader = new FileReader();
+        reader.onload = async ev => {
+          const dataUrl = ev.target.result;
+          _state.editingItem._coverData = null;
+
+          // Only run BarcodeDetector if native; otherwise show the failure message
+          if (window.BarcodeDetector) {
+            const blobCode = await (async () => {
+              try {
+                const det = new BarcodeDetector({ formats: ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf','qr_code'] });
+                const img = await _dataUrlToImage(dataUrl);
+                const bmp = await createImageBitmap(img);
+                const res = await det.detect(bmp);
+                bmp.close();
+                return res?.[0]?.rawValue || null;
+              } catch (_) { return null; }
+            })();
+
+            if (blobCode) {
+              const manualEl = document.getElementById('barcode-manual');
+              if (manualEl) manualEl.value = blobCode;
+              showScanStatus('matched',
+                `<strong>✓ Barcode detected:</strong> <span class="mono" style="color:var(--accent)">${blobCode}</span>
+                 <br><span style="color:var(--text2);font-size:12px;display:block;margin-top:4px">Looking up item details…</span>`
+              );
+              toast('Barcode read: ' + blobCode, 'success');
+              lookupBarcode(blobCode);
+              return;
+            }
+          }
+
+          showScanStatus('no-match',
+            `<strong>⚠ No barcode found in this photo.</strong>
+             <br><span style="color:var(--text2);font-size:12px;display:block;margin-top:6px">
+               Tips: ensure the barcode is in focus, well-lit, and not at a steep angle.
+               <br>You can also type the number printed below the barcode in the field below.
+             </span>`
+          );
+        };
+        reader.readAsDataURL(file);
+      }
+    });
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -581,7 +576,6 @@ async function _extractTextFromCoverImage(dataUrl) {
 
     showCoverScanStatus('loading', '<span class="spin">⏳</span> Running OCR… (may take a moment)');
 
-    // Tesseract v4: createWorker → load → loadLanguage → initialize → recognize
     worker = await Tesseract.createWorker({
       workerPath: 'https://unpkg.com/tesseract.js@4.0.2/dist/worker.min.js',
       corePath:   'https://unpkg.com/tesseract.js-core@4.0.2/tesseract-core.wasm.js',
@@ -642,7 +636,7 @@ async function _extractTextFromCoverImage(dataUrl) {
 
   } catch (ocrErr) {
     if (worker) { try { await worker.terminate(); } catch (_) {} }
-    console.warn('OCR failed:', ocrErr);
+    console.warn('[scanner] OCR failed:', ocrErr);
     showCoverScanStatus('info',
       `<strong>ℹ OCR unavailable.</strong>
        <br><span style="font-size:12px;color:var(--text2)">

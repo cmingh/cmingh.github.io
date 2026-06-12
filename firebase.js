@@ -1,14 +1,17 @@
-// js/firebase.js
+// js/firebase.js  (v2 — adds queryUserByIdentifier for username/phone login)
 // ─────────────────────────────────────────────────────────────
 // Firebase initialisation. Loaded as a <script type="module">
 // BEFORE main.js so that window._fb and window._fbReady are set
 // before the app boots.
 //
-// FIX: getAllUsers() now correctly queries each user's
+// NEW: window._fb.queryUserByIdentifier(identifier)
+//   Looks up a user document by 'username' or 'phone' field and
+//   returns their email — used by auth.js so users can sign in
+//   with a username or phone number instead of their email.
+//
+// FIX (from v1): getAllUsers() correctly queries each user's
 // 'collection' *subcollection* with a count query instead of
-// trying to read a 'collection' field off the user document
-// (which never existed). Returns {id, firstName, lastName,
-// username, itemCount, icon} for every user except the caller.
+// trying to read a 'collection' field off the user document.
 // ─────────────────────────────────────────────────────────────
 
 import './state.js';
@@ -67,11 +70,13 @@ if (!FIREBASE_ENABLED) {
           } catch (profileErr) {
             console.warn('[firebase] Could not load profile:', profileErr);
             window._state.user = {
-              id: firebaseUser.uid, email: firebaseUser.email,
+              id:        firebaseUser.uid,
+              email:     firebaseUser.email,
               username:  firebaseUser.email.split('@')[0],
-              firstName: 'User', lastName: '',
-              phone: null,
-              joined: new Date().toISOString().split('T')[0],
+              firstName: 'User',
+              lastName:  '',
+              phone:     null,
+              joined:    new Date().toISOString().split('T')[0],
             };
           }
 
@@ -105,14 +110,67 @@ if (!FIREBASE_ENABLED) {
         signup: async (email, pw, firstName, lastName, username, phone) => {
           const cred = await createUserWithEmailAndPassword(auth, email, pw);
           await updateProfile(cred.user, { displayName: firstName + ' ' + lastName });
+          // Normalise phone to digits-only for consistent lookups
+          const normPhone = phone ? phone.replace(/[\s\-().+]/g, '') : null;
           await setDoc(doc(db, 'users', cred.user.uid), {
-            firstName, lastName, username, email, phone: phone || null,
+            firstName, lastName, username, email,
+            phone: normPhone,
             joined: new Date().toISOString().split('T')[0],
           });
           return cred;
         },
 
         logout: () => signOut(auth),
+
+        // ── queryUserByIdentifier ─────────────────────────────
+        // Used by auth.js to resolve a username or phone number
+        // to an email address so we can call signInWithEmailAndPassword.
+        //
+        // Runs two parallel Firestore queries (username and phone)
+        // and returns whichever resolves first with a match.
+        // Returns null (not throws) when the user simply doesn't exist.
+        queryUserByIdentifier: async (identifier) => {
+          const trimmed = identifier.trim();
+          // Normalise phone (digits only) for comparison
+          const normPhone = trimmed.replace(/[\s\-().+]/g, '');
+          const usersRef  = collection(db, 'users');
+
+          // Run both queries in parallel for speed
+          const [byUsername, byPhone] = await Promise.allSettled([
+            getDocs(query(usersRef, where('username', '==', trimmed),      limit(1))),
+            getDocs(query(usersRef, where('phone',    '==', normPhone),     limit(1))),
+          ]);
+
+          // Check username result
+          if (byUsername.status === 'fulfilled' && !byUsername.value.empty) {
+            const data = byUsername.value.docs[0].data();
+            if (data.email) return data.email;
+          }
+
+          // Check phone result
+          if (byPhone.status === 'fulfilled' && !byPhone.value.empty) {
+            const data = byPhone.value.docs[0].data();
+            if (data.email) return data.email;
+          }
+
+          // Also try case-insensitive username by fetching a broader set
+          // (Firestore doesn't support ILIKE, but usernames should be unique
+          // so an exact lowercase match is good enough for most cases).
+          const lowerTrimmed = trimmed.toLowerCase();
+          if (lowerTrimmed !== trimmed) {
+            try {
+              const snap = await getDocs(
+                query(usersRef, where('username', '==', lowerTrimmed), limit(1))
+              );
+              if (!snap.empty) {
+                const data = snap.docs[0].data();
+                if (data.email) return data.email;
+              }
+            } catch (_) {}
+          }
+
+          return null; // not found — not an error
+        },
 
         saveItem: async (item) => {
           if (!window._state.user) return null;
@@ -194,21 +252,14 @@ if (!FIREBASE_ENABLED) {
         googleSignup: async () => { throw new Error('Google Sign-Up requires additional Firebase configuration'); },
 
         // ── getAllUsers — FIXED ────────────────────────────────
-        // Original bug: read a non-existent 'collection' field on
-        // the user document and filtered by its length.
-        //
-        // Fix: enumerate users/{uid} documents, then for each user
-        // run a count query against their collection subcollection.
-        // We include every user (even with 0 items) so the trade
-        // page can display them — ui.js already filters to other
-        // users and shows a sensible empty state if none exist.
+        // Enumerates users/{uid} documents, then for each user runs a
+        // count query against their collection subcollection.
         getAllUsers: async () => {
           try {
             const usersSnap = await getDocs(collection(db, 'users'));
             const results = await Promise.allSettled(
               usersSnap.docs.map(async (userDoc) => {
                 const data = userDoc.data();
-                // Count items in the subcollection without fetching them all
                 let itemCount = 0;
                 try {
                   const countSnap = await getCountFromServer(
@@ -216,19 +267,14 @@ if (!FIREBASE_ENABLED) {
                   );
                   itemCount = countSnap.data().count;
                 } catch (_countErr) {
-                  // getCountFromServer may not be available in all SDK versions;
-                  // fall back to a lightweight getDocs
                   try {
                     const itemsSnap = await getDocs(
                       query(collection(db, 'users', userDoc.id, 'collection'), limit(1))
                     );
-                    // We can't get the exact count cheaply, so use ≥1 as a proxy
                     itemCount = itemsSnap.size;
-                  } catch (_) { /* leave as 0 */ }
+                  } catch (_) {}
                 }
 
-                // Pick the icon of the first item so the card looks nice,
-                // but don't fetch all items just for this.
                 let icon = '📦';
                 try {
                   const firstSnap = await getDocs(
