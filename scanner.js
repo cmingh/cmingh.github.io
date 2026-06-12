@@ -1,17 +1,44 @@
 // js/scanner.js
 // ─────────────────────────────────────────────────────────────
-// Barcode scanning (camera + file upload) and book cover OCR.
-// Uses ZXing 0.19.x (BrowserMultiFormatReader) for barcodes.
-// Tesseract.js is lazy-loaded from CDN for cover OCR.
+// Barcode scanning (camera + file upload) and media cover OCR.
+//
+// CHANGES vs original:
+//   - Replaced ZXing with QuaggaJS (more reliable UPC/EAN/ISBN
+//     detection from still images and live video).
+//   - Fixed Tesseract.js v4 createWorker() — load/loadLanguage/
+//     initialize calls are required in sequence.
+//   - Cover-tab label + icon already driven by ui.js
+//     _updateCoverTabUI(); no changes needed here.
 // ─────────────────────────────────────────────────────────────
 
 import { _state } from './state.js';
 import { toast, switchTab } from './ui.js';
-import { lookupBarcode, searchBookByTitle } from './lookup.js';
+import { lookupBarcode, searchBookByTitle, searchMediaByTitle } from './lookup.js';
 
 // ── Camera state ──────────────────────────────────────────────
 let _cameraStream   = null;
-let _cameraScanning = false;
+let _cameraRunning  = false;
+let _quaggaLive     = false;   // true while Quagga is scanning live video
+
+// ═══════════════════════════════════════════════════════════════
+// QUAGGA LOADER  — lazy-load once from CDN
+// ═══════════════════════════════════════════════════════════════
+
+let _quaggaReady = false;
+
+async function _loadQuagga() {
+  if (_quaggaReady && window.Quagga) return;
+  if (!window.Quagga) {
+    await new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src     = 'https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js';
+      s.onload  = res;
+      s.onerror = () => rej(new Error('Quagga CDN load failed'));
+      document.head.appendChild(s);
+    });
+  }
+  _quaggaReady = true;
+}
 
 // ═══════════════════════════════════════════════════════════════
 // CAMERA — start / stop / capture
@@ -22,13 +49,17 @@ export async function startCamera() {
     toast('Camera not supported in this browser', 'error');
     return;
   }
+
+  try {
+    await _loadQuagga();
+  } catch (e) {
+    toast('Could not load barcode library — try typing the barcode manually', 'error');
+    return;
+  }
+
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: { ideal: 'environment' },
-        width:  { ideal: 1280 },
-        height: { ideal: 720 },
-      },
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
     });
     _cameraStream = stream;
 
@@ -42,9 +73,9 @@ export async function startCamera() {
     const controls = document.getElementById('camera-controls');
     if (controls) controls.style.display = 'flex';
 
+    _cameraRunning = true;
     toast('Camera active — point at a barcode', 'success');
-    _startContinuousZXingScan();
-
+    _startQuaggaLive();
   } catch (e) {
     toast('Camera access denied or unavailable', 'error');
     console.error('Camera error:', e);
@@ -52,7 +83,13 @@ export async function startCamera() {
 }
 
 export function stopCamera() {
-  _cameraScanning = false;
+  _cameraRunning  = false;
+
+  // Stop Quagga live scanning first
+  if (_quaggaLive && window.Quagga) {
+    try { Quagga.stop(); } catch (_) {}
+    _quaggaLive = false;
+  }
 
   if (_cameraStream) {
     _cameraStream.getTracks().forEach(t => t.stop());
@@ -80,98 +117,66 @@ export async function captureFrame() {
   canvas.height = video.videoHeight;
   canvas.getContext('2d').drawImage(video, 0, 0);
 
-  const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
   const preview = document.getElementById('scan-preview-img');
   if (preview) { preview.src = dataUrl; preview.style.display = ''; }
 
   stopCamera();
   showScanStatus('loading', '<span class="spin">⏳</span> Reading barcode from captured frame…');
-  await _runZXingOnDataUrl(dataUrl);
+  await _decodeImageWithQuagga(dataUrl);
 }
 
-// ── Continuous ZXing scan from live video ─────────────────────
-function _startContinuousZXingScan() {
-  if (!window.ZXing) return;
-  _cameraScanning = true;
+// ── Continuous Quagga scan from live video ────────────────────
+function _startQuaggaLive() {
+  if (!window.Quagga) return;
 
-  const codeReader = new ZXing.BrowserMultiFormatReader();
+  // We piggy-back on the existing <video> element by using a canvas
+  // tick loop instead of Quagga.init() (which would create its own
+  // video element). This lets us reuse our existing camera UI.
+  _quaggaLive = false; // use the frame-tick approach instead
+
   const video  = document.getElementById('camera-video');
   const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
-  let lastSeenCode = null; // Prevent duplicate lookups
-  let sameScanCount = 0;
+  let lastCode = null;
 
   const tick = async () => {
-    if (!_cameraScanning || !video?.videoWidth) {
-      if (_cameraScanning) requestAnimationFrame(tick);
+    if (!_cameraRunning || !video?.videoWidth) {
+      if (_cameraRunning) requestAnimationFrame(tick);
       return;
     }
+
     canvas.width  = video.videoWidth;
     canvas.height = video.videoHeight;
-    ctx.drawImage(video, 0, 0);
+    canvas.getContext('2d').drawImage(video, 0, 0);
 
-    try {
-      // decodeFromCanvas throws NotFoundException when no barcode found — that's normal.
-      let result = null;
-      try {
-        result = codeReader.decodeFromCanvas(canvas);
-      } catch (_canvasErr) {
-        // Try with hints to improve detection
-        const hints = new Map();
-        if (window.ZXing?.DecodeHintType) {
-          hints.set(window.ZXing.DecodeHintType.TRY_HARDER, true);
-        }
-        try {
-          result = await codeReader.decodeFromImage(canvas, hints);
-        } catch (_) {
-          // Both methods failed, keep scanning
-        }
-      }
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+    const code = await _quaggaDecode(dataUrl);
 
-      if (result) {
-        const code = result.getText();
-        
-        // Only process if different from last detected code
-        if (code !== lastSeenCode) {
-          lastSeenCode = code;
-          sameScanCount = 0;
-          _cameraScanning = false;
-          stopCamera();
+    if (code && code !== lastCode) {
+      lastCode = code;
+      _cameraRunning = false;
+      stopCamera();
 
-          const manualEl = document.getElementById('barcode-manual');
-          if (manualEl) manualEl.value = code;
+      const manualEl = document.getElementById('barcode-manual');
+      if (manualEl) manualEl.value = code;
 
-          showScanStatus('matched',
-            `<strong>✓ Barcode detected:</strong> <span class="mono" style="color:var(--accent)">${code}</span>
-             <br><span style="color:var(--text2);font-size:12px;display:block;margin-top:4px">Looking up item details…</span>`
-          );
-          toast('Barcode read: ' + code, 'success');
-          lookupBarcode(code);
-          return;
-        } else {
-          sameScanCount++;
-          // Allow confirming same barcode on second detection
-          if (sameScanCount > 1) {
-            _cameraScanning = false;
-            stopCamera();
-            toast('Barcode confirmed: ' + code, 'success');
-            return;
-          }
-        }
-      } else {
-        lastSeenCode = null;
-        sameScanCount = 0;
-      }
-    } catch (e) {
-      // NotFoundException and other errors — expected, keep scanning.
-      lastSeenCode = null;
-      sameScanCount = 0;
+      showScanStatus('matched',
+        `<strong>✓ Barcode detected:</strong> <span class="mono" style="color:var(--accent)">${code}</span>
+         <br><span style="color:var(--text2);font-size:12px;display:block;margin-top:4px">Looking up item details…</span>`
+      );
+      toast('Barcode read: ' + code, 'success');
+      lookupBarcode(code);
+      return;
     }
 
-    if (_cameraScanning) requestAnimationFrame(tick);
+    if (_cameraRunning) {
+      // ~6 fps is plenty for live scanning
+      setTimeout(() => requestAnimationFrame(tick), 160);
+    }
   };
 
-  setTimeout(tick, 500); // give video a moment to stabilise
+  // Give video a moment to stabilise before scanning
+  setTimeout(() => requestAnimationFrame(tick), 600);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -197,120 +202,95 @@ export function processScanFile(file) {
     const img = document.getElementById('scan-preview-img');
     if (img) { img.src = ev.target.result; img.style.display = ''; }
     _state.editingItem._coverData = null;
-    showScanStatus('loading', '<span class="spin">⏳</span> Reading barcode with ZXing…');
-    _runZXingOnDataUrl(ev.target.result);
+    showScanStatus('loading', '<span class="spin">⏳</span> Reading barcode with QuaggaJS…');
+    _decodeImageWithQuagga(ev.target.result);
   };
   reader.readAsDataURL(file);
 }
 
-// ── Core ZXing decode ─────────────────────────────────────────
-async function _runZXingOnDataUrl(dataUrl) {
-  if (!window.ZXing) {
-    showScanStatus('no-match', '⚠ ZXing library not loaded. Type the barcode manually below.');
+// ── Core Quagga decode (static image) ────────────────────────
+async function _decodeImageWithQuagga(dataUrl) {
+  try {
+    await _loadQuagga();
+  } catch (_) {
+    showScanStatus('no-match', '⚠ Barcode library failed to load. Type the barcode manually below.');
     return;
   }
 
-  try {
-    // Load image into an HTMLImageElement first (required by ZXing APIs)
-    const image = new Image();
-    await new Promise((res, rej) => {
-      image.onload  = res;
-      image.onerror = rej;
-      image.src     = dataUrl;
-    });
+  const code = await _quaggaDecode(dataUrl);
 
-    // Draw onto an offscreen canvas
-    const canvas = document.createElement('canvas');
-    canvas.width  = image.naturalWidth  || image.width;
-    canvas.height = image.naturalHeight || image.height;
-    canvas.getContext('2d').drawImage(image, 0, 0);
+  if (code) {
+    const manualEl = document.getElementById('barcode-manual');
+    if (manualEl) manualEl.value = code;
 
-    const codeReader = new ZXing.BrowserMultiFormatReader();
-    let code;
+    showScanStatus('matched',
+      `<strong>✓ Barcode detected:</strong> <span class="mono" style="color:var(--accent)">${code}</span>
+       <br><span style="color:var(--text2);font-size:12px;display:block;margin-top:4px">Looking up item details…</span>`
+    );
+    toast('Barcode read: ' + code, 'success');
 
-    // First try native BarcodeDetector if available (faster and more reliable on some devices)
-    let result = null;
-    let codeFromDetector = null;
     try {
-      if (window.BarcodeDetector && typeof BarcodeDetector === 'function') {
-        try {
-          const bitmap = await createImageBitmap(canvas);
-          const detector = new BarcodeDetector({formats: ['ean_13','ean_8','upc_a','upc_e','code_128','code_39']});
-          const barcodes = await detector.detect(bitmap);
-          if (barcodes && barcodes.length) {
-            codeFromDetector = barcodes[0].rawValue || barcodes[0].raw || null;
-          }
-        } catch (bdErr) {
-          // BarcodeDetector may fail on some browsers; fall back to ZXing below.
-        }
-      }
-    } catch (e) {
-      codeFromDetector = null;
-    }
-
-    if (codeFromDetector) {
-      // pretend we have a ZXing result object
-      result = { getText: () => codeFromDetector };
-    } else {
-      // decodeFromCanvas throws NotFoundException when no barcode found — that's normal.
-      try {
-        result = codeReader.decodeFromCanvas(canvas);
-      } catch (_canvasErr) {
-        // Try with hints to improve detection
-        const hints = new Map();
-        if (window.ZXing?.DecodeHintType) {
-          hints.set(window.ZXing.DecodeHintType.TRY_HARDER, true);
-        }
-        try {
-          result = await codeReader.decodeFromImage(canvas, hints);
-        } catch (_) {
-          // Both methods failed — no barcode detected
-          result = null;
-        }
-      }
-    }
-
-    if (result) {
-      const code = result.getText();
-      if (!code || code.trim().length === 0) {
-        throw new Error('Barcode detected but code is empty');
-      }
-      showScanStatus('matched',
-        `<strong>✓ Barcode detected:</strong> <span class="mono" style="color:var(--accent)">${code}</span>
-         <br><span style="color:var(--text2);font-size:12px;display:block;margin-top:4px">Looking up item details…</span>`
-      );
-      toast('Barcode read: ' + code, 'success');
-      // Use a timeout to prevent infinite hanging if lookup fails
-      const lookupPromise = Promise.race([
+      await Promise.race([
         lookupBarcode(code),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('Lookup timeout')), 10000))
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 12000)),
       ]);
-      await lookupPromise.catch(err => {
-        console.warn('Lookup error or timeout:', err);
-        showScanStatus('no-match',
-          `<strong>⚠ Lookup failed for <span class="mono">${code}</span>.</strong>
-           <br><span style="color:var(--text2);font-size:12px;display:block;margin-top:4px">
-             The barcode was read, but the lookup timed out. Try typing it manually below.
-           </span>`
-        );
-      });
-      return;
-    } else {
-      throw new Error('No barcode found in image');
+    } catch (err) {
+      showScanStatus('no-match',
+        `<strong>⚠ Lookup timed out for <span class="mono">${code}</span>.</strong>
+         <br><span style="color:var(--text2);font-size:12px">Try typing it manually below.</span>`
+      );
     }
-  } catch (_err) {
+  } else {
     showScanStatus('no-match',
       `<strong>⚠ No barcode found in this photo.</strong>
        <br><span style="color:var(--text2);font-size:12px;display:block;margin-top:6px">
          Tips: ensure the barcode is in focus, well-lit, and fills most of the frame.
-         <br>Try the <strong>Book Cover</strong> tab, or type the barcode manually below.
+         <br>Try the <strong>Cover Search</strong> tab, or type the barcode manually below.
        </span>`
     );
   }
 }
 
+// Promise wrapper around Quagga.decodeSingle
+function _quaggaDecode(dataUrl) {
+  return new Promise(resolve => {
+    if (!window.Quagga) { resolve(null); return; }
+
+    // Try multiple reader types for maximum barcode format coverage
+    const readers = [
+      'ean_reader',       // EAN-13 / EAN-8 (international retail)
+      'upc_reader',       // UPC-A / UPC-E (North American retail)
+      'upc_e_reader',
+      'ean_8_reader',
+      'code_128_reader',  // ISBN / generic
+      'code_39_reader',
+      'i2of5_reader',
+    ];
+
+    let resolved = false;
+    const done = val => { if (!resolved) { resolved = true; resolve(val); } };
+
+    // Safety: resolve null after 5 s so the caller never hangs
+    setTimeout(() => done(null), 5000);
+
+    Quagga.decodeSingle(
+      {
+        src: dataUrl,
+        numOfWorkers: 0,          // synchronous in same thread (required for data URLs)
+        locate: true,
+        inputStream: { size: 1200 },
+        decoder: { readers, multiple: false },
+      },
+      result => {
+        const code = result?.codeResult?.code || null;
+        done(code);
+      }
+    );
+  });
+}
+
 // ═══════════════════════════════════════════════════════════════
-// BOOK COVER SCAN — file upload → OCR → title search
+// COVER SCAN — file upload → OCR → title search
 // ═══════════════════════════════════════════════════════════════
 
 export function handleCoverScanDrop(e) {
@@ -347,64 +327,54 @@ export function processCoverScanFile(file) {
   reader.readAsDataURL(file);
 }
 
-// ── OCR via Tesseract.js (lazy-loaded from CDN) ───────────────
+// ── OCR via Tesseract.js v4 (lazy-loaded from CDN) ───────────
 async function _extractTextFromCoverImage(dataUrl) {
+  let worker = null;
   try {
+    // Lazy-load Tesseract.js v4 once
     if (!window.Tesseract) {
       showCoverScanStatus('loading', '<span class="spin">⏳</span> Loading OCR engine…');
       await new Promise((res, rej) => {
         const s   = document.createElement('script');
-        // FIX: pin to a stable Tesseract.js v4 CDN URL.
-        // v5 changed the createWorker() signature — the OEM integer
-        // second argument was removed and options moved to a single object.
-        // v4 still works with the current worker lifecycle below.
         s.src     = 'https://unpkg.com/tesseract.js@4.0.2/dist/tesseract.min.js';
         s.onload  = res;
-        s.onerror = rej;
+        s.onerror = () => rej(new Error('Tesseract CDN load failed'));
         document.head.appendChild(s);
       });
     }
 
     showCoverScanStatus('loading', '<span class="spin">⏳</span> Running OCR… (this may take a moment)');
 
-    let worker;
-    let text = '';
-    try {
-      worker = await Tesseract.createWorker({
-        workerPath: 'https://unpkg.com/tesseract.js@4.0.2/dist/worker.min.js',
-        corePath: 'https://unpkg.com/tesseract.js@4.0.2/dist/tesseract-core.wasm.js',
-        langPath: 'https://unpkg.com/tesseract.js@4.0.2/lang',
-        logger: m => {
-          if (m.status === 'recognizing text') {
-            const pct = Math.round((m.progress || 0) * 100);
-            showCoverScanStatus('loading', `<span class="spin">⏳</span> Recognizing text… ${pct}%`);
-          }
-        },
-      });
+    // ── Tesseract v4 worker lifecycle ─────────────────────────
+    // v4 requires: createWorker → load → loadLanguage → initialize → recognize
+    worker = await Tesseract.createWorker({
+      workerPath: 'https://unpkg.com/tesseract.js@4.0.2/dist/worker.min.js',
+      corePath:   'https://unpkg.com/tesseract.js-core@4.0.2/tesseract-core.wasm.js',
+      langPath:   'https://tessdata.projectnaptha.com/4.0.0',
+      logger: m => {
+        if (m.status === 'recognizing text') {
+          const pct = Math.round((m.progress || 0) * 100);
+          showCoverScanStatus('loading', `<span class="spin">⏳</span> Recognizing text… ${pct}%`);
+        }
+      },
+    });
 
-      // Wrap OCR in timeout to prevent infinite hangs
-      const ocrTimeout = new Promise((_, rej) => setTimeout(() => rej(new Error('OCR timeout')), 30000));
-      const ocrPromise = (async () => {
-        await worker.load();
-        await worker.loadLanguage('eng');
-        await worker.initialize('eng');
-        const result = await worker.recognize(dataUrl);
-        return result.data?.text || '';
-      })();
-      text = await Promise.race([ocrPromise, ocrTimeout]);
-    } catch (workerErr) {
-      if (worker) {
-        try { await worker.terminate(); } catch (e) {}
-      }
-      throw workerErr;
-    } finally {
-      if (worker) {
-        try { await worker.terminate(); } catch (e) {}
-      }
-    }
+    await worker.load();
+    await worker.loadLanguage('eng');
+    await worker.initialize('eng');
 
-    // Keep lines that look like real words (not pure numbers/punctuation)
-    if (!text || text.trim().length === 0) {
+    // Wrap recognize in a 30-second timeout
+    const ocrResult = await Promise.race([
+      worker.recognize(dataUrl),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('OCR timeout')), 30000)),
+    ]);
+
+    const rawText = ocrResult?.data?.text || '';
+
+    await worker.terminate();
+    worker = null;
+
+    if (!rawText.trim()) {
       showCoverScanStatus('info',
         `<strong>ℹ OCR found no readable text.</strong>
          <br><span style="font-size:12px;color:var(--text2)">Try a clearer photo with better lighting, or type the title below.</span>`
@@ -412,12 +382,13 @@ async function _extractTextFromCoverImage(dataUrl) {
       return;
     }
 
-    const lines = text
+    // Filter lines: keep lines with at least 3 real alphabetic characters
+    const lines = rawText
       .split('\n')
       .map(l => l.trim())
-      .filter(l => l.length > 2 && !/^[\d\s\W]+$/.test(l));
+      .filter(l => l.length > 2 && /[a-zA-Z]{3,}/.test(l));
 
-    if (lines.length === 0) {
+    if (!lines.length) {
       showCoverScanStatus('info',
         `<strong>ℹ OCR found no readable text.</strong>
          <br><span style="font-size:12px;color:var(--text2)">Try a clearer photo with better lighting, or type the title below.</span>`
@@ -425,27 +396,27 @@ async function _extractTextFromCoverImage(dataUrl) {
       return;
     }
 
-    // Use the longest line from the top 3 — cover titles are often the biggest text
-    // and OCR picks them up as long lines, avoiding short noise words.
-    const candidate = lines
-      .slice(0, 3)
-      .sort((a, b) => b.length - a.length)[0];
+    // Pick the longest line from the top 4 — cover titles tend to be the biggest text
+    const candidate = lines.slice(0, 4).sort((a, b) => b.length - a.length)[0];
 
     const titleInput = document.getElementById('cover-title-input');
     if (titleInput) titleInput.value = candidate;
 
     showCoverScanStatus('matched',
       `<strong>✓ Text detected:</strong> "${candidate}"
-       <br><span style="font-size:12px;color:var(--text2);display:block;margin-top:4px">Searching Open Library…</span>`
+       <br><span style="font-size:12px;color:var(--text2);display:block;margin-top:4px">Searching…</span>`
     );
-    searchBookByTitle(candidate);
+
+    // Use the right search for the selected media type
+    searchMediaByTitle(candidate);
 
   } catch (ocrErr) {
+    if (worker) { try { await worker.terminate(); } catch (_) {} }
     console.warn('OCR failed:', ocrErr);
     showCoverScanStatus('info',
       `<strong>ℹ OCR engine unavailable.</strong>
        <br><span style="font-size:12px;color:var(--text2)">
-         Type the title or author below and click Search.
+         Type the title or artist below and click Search.
        </span>`
     );
   }

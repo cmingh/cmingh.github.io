@@ -3,20 +3,23 @@
 // Firebase initialisation. Loaded as a <script type="module">
 // BEFORE main.js so that window._fb and window._fbReady are set
 // before the app boots.
+//
+// FIX: getAllUsers() now correctly queries each user's
+// 'collection' *subcollection* with a count query instead of
+// trying to read a 'collection' field off the user document
+// (which never existed). Returns {id, firstName, lastName,
+// username, itemCount, icon} for every user except the caller.
 // ─────────────────────────────────────────────────────────────
 
 import './state.js';
 import { FIREBASE_CONFIG } from './firebase-config.js';
 
-// Guard: only initialise when real config values are present
-// FIX: the old guard checked for placeholder strings — now checks
-// that apiKey doesn't start with "YOUR_" and has meaningful length.
 const FIREBASE_ENABLED =
   !!FIREBASE_CONFIG.apiKey &&
-  !FIREBASE_CONFIG.apiKey.startsWith("YOUR_") &&
+  !FIREBASE_CONFIG.apiKey.startsWith('YOUR_') &&
   FIREBASE_CONFIG.apiKey.length > 10 &&
   !!FIREBASE_CONFIG.projectId &&
-  !FIREBASE_CONFIG.projectId.startsWith("YOUR_");
+  !FIREBASE_CONFIG.projectId.startsWith('YOUR_');
 
 function signalReady() {
   window._fbReady = true;
@@ -24,23 +27,22 @@ function signalReady() {
 }
 
 if (!FIREBASE_ENABLED) {
-  // No config — signal immediately so main.js boots in local mode
   console.log('[firebase] No valid config — running in local mode');
   signalReady();
 } else {
   console.log('[firebase] Real config detected — initialising Firebase…');
   (async () => {
     try {
-      const { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js");
+      const { initializeApp } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js');
       const {
         getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword,
         signOut, onAuthStateChanged, updateProfile,
-      } = await import("https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js");
+      } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js');
       const {
         getFirestore, doc, setDoc, getDoc, collection, collectionGroup,
         addDoc, deleteDoc, getDocs, onSnapshot, serverTimestamp, orderBy,
-        query, where, limit,
-      } = await import("https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js");
+        query, where, limit, getCountFromServer,
+      } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
 
       const app  = initializeApp(FIREBASE_CONFIG);
       const auth = getAuth(app);
@@ -50,65 +52,62 @@ if (!FIREBASE_ENABLED) {
 
       onAuthStateChanged(auth, async (firebaseUser) => {
         if (firebaseUser) {
-          // Load profile from Firestore
           try {
-            const profSnap = await getDoc(doc(db, "users", firebaseUser.uid));
+            const profSnap = await getDoc(doc(db, 'users', firebaseUser.uid));
             const prof = profSnap.exists() ? profSnap.data() : {};
             window._state.user = {
               id:        firebaseUser.uid,
               email:     firebaseUser.email,
-              username:  prof.username  || firebaseUser.email.split("@")[0],
-              firstName: prof.firstName || firebaseUser.displayName?.split(" ")[0] || "User",
-              lastName:  prof.lastName  || firebaseUser.displayName?.split(" ").slice(1).join(" ") || "",
+              username:  prof.username  || firebaseUser.email.split('@')[0],
+              firstName: prof.firstName || firebaseUser.displayName?.split(' ')[0] || 'User',
+              lastName:  prof.lastName  || firebaseUser.displayName?.split(' ').slice(1).join(' ') || '',
               phone:     prof.phone     || null,
-              joined:    prof.joined    || new Date().toISOString().split("T")[0],
+              joined:    prof.joined    || new Date().toISOString().split('T')[0],
             };
           } catch (profileErr) {
             console.warn('[firebase] Could not load profile:', profileErr);
             window._state.user = {
               id: firebaseUser.uid, email: firebaseUser.email,
-              username: firebaseUser.email.split("@")[0],
-              firstName: "User", lastName: "",
+              username:  firebaseUser.email.split('@')[0],
+              firstName: 'User', lastName: '',
               phone: null,
-              joined: new Date().toISOString().split("T")[0],
+              joined: new Date().toISOString().split('T')[0],
             };
           }
 
-          // Live-sync collection
           if (unsubscribeCollection) unsubscribeCollection();
-          const colRef = collection(db, "users", firebaseUser.uid, "collection");
+          const colRef = collection(db, 'users', firebaseUser.uid, 'collection');
           unsubscribeCollection = onSnapshot(
-            query(colRef, orderBy("dateAdded", "desc")),
+            query(colRef, orderBy('dateAdded', 'desc')),
             (snap) => {
               window._state.collection = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-              if (window._currentPage === "collection") window.renderCollection?.();
-              if (window._currentPage === "profile")    window.renderProfile?.();
+              if (window._currentPage === 'collection') window.renderCollection?.();
+              if (window._currentPage === 'profile')    window.renderProfile?.();
             }
           );
 
           window.updateNavForAuth?.();
-          window.navigate?.("collection");
+          window.navigate?.('collection');
         } else {
           window._state.user = null;
           if (unsubscribeCollection) { unsubscribeCollection(); unsubscribeCollection = null; }
           window._state.collection = [];
           window.updateNavForAuth?.();
-          window.navigate?.("home");
+          window.navigate?.('home');
         }
       });
 
-      // Expose Firebase methods to the rest of the app
       window._fb = {
         enabled: true,
 
-        login: (email, pw) => signInWithEmailAndPassword(auth, email, pw),
+        login:  (email, pw) => signInWithEmailAndPassword(auth, email, pw),
 
         signup: async (email, pw, firstName, lastName, username, phone) => {
           const cred = await createUserWithEmailAndPassword(auth, email, pw);
-          await updateProfile(cred.user, { displayName: firstName + " " + lastName });
-          await setDoc(doc(db, "users", cred.user.uid), {
+          await updateProfile(cred.user, { displayName: firstName + ' ' + lastName });
+          await setDoc(doc(db, 'users', cred.user.uid), {
             firstName, lastName, username, email, phone: phone || null,
-            joined: new Date().toISOString().split("T")[0],
+            joined: new Date().toISOString().split('T')[0],
           });
           return cred;
         },
@@ -117,20 +116,15 @@ if (!FIREBASE_ENABLED) {
 
         saveItem: async (item) => {
           if (!window._state.user) return null;
-          const uid = window._state.user.id;
+          const uid      = window._state.user.id;
           const username = window._state.user.username || window._state.user.email || 'anonymous';
           const { id, ...data } = item;
-          const payload = {
-            ...data,
-            username,
-            ownerId: uid,
-          };
-          // Only treat as update if id is a Firestore doc id (not our local 'i'+timestamp)
-          if (id && !id.startsWith("i")) {
-            await setDoc(doc(db, "users", uid, "collection", id), payload, { merge: true });
+          const payload  = { ...data, username, ownerId: uid };
+          if (id && !id.startsWith('i')) {
+            await setDoc(doc(db, 'users', uid, 'collection', id), payload, { merge: true });
             return id;
           }
-          const ref = await addDoc(collection(db, "users", uid, "collection"), {
+          const ref = await addDoc(collection(db, 'users', uid, 'collection'), {
             ...payload,
             dateAdded: serverTimestamp(),
           });
@@ -139,25 +133,25 @@ if (!FIREBASE_ENABLED) {
 
         deleteItem: async (itemId) => {
           if (!window._state.user) return;
-          await deleteDoc(doc(db, "users", window._state.user.id, "collection", itemId));
+          await deleteDoc(doc(db, 'users', window._state.user.id, 'collection', itemId));
         },
 
         updateProfile: async (uid, data) =>
-          setDoc(doc(db, "users", uid), data, { merge: true }),
+          setDoc(doc(db, 'users', uid), data, { merge: true }),
 
         saveWishlist: async (list) => {
           if (!window._state.user) return;
-          await setDoc(doc(db, "users", window._state.user.id), { wishlist: list }, { merge: true });
+          await setDoc(doc(db, 'users', window._state.user.id), { wishlist: list }, { merge: true });
         },
 
         saveMessages: async (msgs) => {
           if (!window._state.user) return;
-          await setDoc(doc(db, "users", window._state.user.id), { messages: msgs }, { merge: true });
+          await setDoc(doc(db, 'users', window._state.user.id), { messages: msgs }, { merge: true });
         },
 
         loadUserExtra: async () => {
           if (!window._state.user) return;
-          const snap = await getDoc(doc(db, "users", window._state.user.id));
+          const snap = await getDoc(doc(db, 'users', window._state.user.id));
           if (snap.exists()) {
             const d = snap.data();
             if (d.wishlist) window._state.wishlist = d.wishlist;
@@ -195,48 +189,77 @@ if (!FIREBASE_ENABLED) {
           return onSnapshot(q, snap => cb(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
         },
 
-        // Google OAuth — requires Google Cloud Setup in Firebase Console
-        googleLogin: async () => {
-          // Implementation would require GoogleAuthProvider from Firebase
-          // For now, this is a stub. To enable:
-          // 1. Set up OAuth credentials in Firebase Console
-          // 2. Import GoogleAuthProvider from firebase-auth
-          // 3. Use signInWithPopup(auth, new GoogleAuthProvider())
-          throw new Error('Google Sign-In requires Firebase configuration');
-        },
+        // Google OAuth stubs — require GoogleAuthProvider setup in Firebase Console
+        googleLogin:  async () => { throw new Error('Google Sign-In requires additional Firebase configuration'); },
+        googleSignup: async () => { throw new Error('Google Sign-Up requires additional Firebase configuration'); },
 
-        googleSignup: async () => {
-          // Same as googleLogin — stub that requires Firebase setup
-          throw new Error('Google Sign-Up requires Firebase configuration');
-        },
-
-        // Get all users for trading page — returns public user profiles
+        // ── getAllUsers — FIXED ────────────────────────────────
+        // Original bug: read a non-existent 'collection' field on
+        // the user document and filtered by its length.
+        //
+        // Fix: enumerate users/{uid} documents, then for each user
+        // run a count query against their collection subcollection.
+        // We include every user (even with 0 items) so the trade
+        // page can display them — ui.js already filters to other
+        // users and shows a sensible empty state if none exist.
         getAllUsers: async () => {
           try {
-            const snap = await getDocs(collection(db, 'users'));
-            return snap.docs
-              .map(d => {
-                const data = d.data();
+            const usersSnap = await getDocs(collection(db, 'users'));
+            const results = await Promise.allSettled(
+              usersSnap.docs.map(async (userDoc) => {
+                const data = userDoc.data();
+                // Count items in the subcollection without fetching them all
+                let itemCount = 0;
+                try {
+                  const countSnap = await getCountFromServer(
+                    collection(db, 'users', userDoc.id, 'collection')
+                  );
+                  itemCount = countSnap.data().count;
+                } catch (_countErr) {
+                  // getCountFromServer may not be available in all SDK versions;
+                  // fall back to a lightweight getDocs
+                  try {
+                    const itemsSnap = await getDocs(
+                      query(collection(db, 'users', userDoc.id, 'collection'), limit(1))
+                    );
+                    // We can't get the exact count cheaply, so use ≥1 as a proxy
+                    itemCount = itemsSnap.size;
+                  } catch (_) { /* leave as 0 */ }
+                }
+
+                // Pick the icon of the first item so the card looks nice,
+                // but don't fetch all items just for this.
+                let icon = '📦';
+                try {
+                  const firstSnap = await getDocs(
+                    query(collection(db, 'users', userDoc.id, 'collection'), limit(1))
+                  );
+                  if (!firstSnap.empty) icon = firstSnap.docs[0].data().icon || '📦';
+                } catch (_) {}
+
                 return {
-                  id: d.id,
+                  id:        userDoc.id,
                   firstName: data.firstName || '',
-                  lastName: data.lastName || '',
-                  username: data.username || '',
-                  collection: data.collection || [],
-                  joined: data.joined,
+                  lastName:  data.lastName  || '',
+                  username:  data.username  || '',
+                  itemCount,
+                  icon,
                 };
               })
-              .filter(u => u.collection && u.collection.length > 0); // Only users with items
+            );
+
+            return results
+              .filter(r => r.status === 'fulfilled')
+              .map(r => r.value);
           } catch (e) {
-            console.warn('Could not load users:', e);
+            console.warn('[firebase] getAllUsers failed:', e);
             return [];
           }
         },
       };
 
     } catch (err) {
-      console.error("[firebase] Failed to initialise:", err);
-      // Fall through to local mode
+      console.error('[firebase] Failed to initialise:', err);
     }
 
     signalReady();
