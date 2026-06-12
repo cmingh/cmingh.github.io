@@ -2,6 +2,13 @@
 // ─────────────────────────────────────────────────────────────
 // Navigation, modals, tabs, toasts, mobile drawer, trade page,
 // profile page, wishlist, discover page, and add-item modal flow.
+//
+// FIXES vs original:
+//   - _updateCoverTabUI() now correctly updates the "Cover/Scan"
+//     tab button label AND the drop-zone text/icon for every
+//     media type, not just books.
+//   - selectType() reliably calls _updateCoverTabUI() every time.
+//   - openAddModal(item) also calls _updateCoverTabUI() on edit.
 // ─────────────────────────────────────────────────────────────
 
 import { _state, MEDIA_TYPES } from './state.js';
@@ -9,7 +16,7 @@ import { saveState } from './storage.js';
 import { buildThemePickers } from './theme.js';
 import { buildManualForm, resetComicTags, populateManualForm } from './forms.js';
 
-// FIX: stopCamera is imported lazily inside navigate() to avoid a
+// FIX: stopCamera is imported lazily inside navigate() / closeModal() to avoid a
 // circular dependency (scanner.js → lookup.js → ui.js → scanner.js).
 // Do NOT import stopCamera at the top level here.
 
@@ -24,7 +31,6 @@ window._currentPage = _currentPage;
 let _tradeUnsubscribe = null;
 
 export function navigate(page) {
-  // Stop camera when leaving the add-modal's scan tab
   if (page !== _currentPage) {
     import('./scanner.js').then(s => s.stopCamera()).catch(() => {});
   }
@@ -38,7 +44,6 @@ export function navigate(page) {
   _currentPage = page;
   window._currentPage = page;
 
-  // Use already-loaded module references (main.js puts them on window)
   if (page === 'collection') window.renderCollection?.();
   if (page === 'discover')   renderDiscover();
   if (page === 'trade')      renderTrade();
@@ -66,16 +71,14 @@ window.closeMobileDrawer  = closeMobileDrawer;
 // MODALS
 // ═══════════════════════════════════════════════════════════════
 
-export function openModal(id)  { document.getElementById(id)?.classList.add('open');    }
+export function openModal(id)  { document.getElementById(id)?.classList.add('open'); }
 export function closeModal(id) {
   document.getElementById(id)?.classList.remove('open');
-  // Stop camera when the add-modal is closed
   if (id === 'modal-add') {
     import('./scanner.js').then(s => s.stopCamera()).catch(() => {});
   }
 }
 
-// Close on backdrop click
 document.querySelectorAll('.modal-overlay').forEach(o =>
   o.addEventListener('click', e => { if (e.target === o) closeModal(o.id); })
 );
@@ -87,24 +90,20 @@ window.closeModal = closeModal;
 export function openAddModal(item) {
   if (!_state.user) { navigate('login'); return; }
 
-  // Reset all scan state
-  const ids = [
-    'add-step-1', 'scan-result', 'scan-preview-img',
-    'cover-scan-result', 'cover-scan-preview', 'book-search-results',
-  ];
-  ids.forEach(id => {
+  // Reset scan state
+  ['scan-result','scan-preview-img','cover-scan-result','cover-scan-preview','book-search-results'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';
   });
-
-  const barcodeEl   = document.getElementById('barcode-manual');
+  const barcodeEl    = document.getElementById('barcode-manual');
   const coverTitleEl = document.getElementById('cover-title-input');
   if (barcodeEl)    barcodeEl.value    = '';
   if (coverTitleEl) coverTitleEl.value = '';
 
   if (item) {
+    // ── Editing an existing item ──────────────────────────────
     _state.selectedType = MEDIA_TYPES.find(m => m.id === item.type) || _state.selectedType;
-    _state.editingItem = JSON.parse(JSON.stringify(item));
+    _state.editingItem  = JSON.parse(JSON.stringify(item));
     _state.editingItem._coverData = item.coverData || item._coverData || null;
     _state.lookupResult = null;
     resetComicTags();
@@ -115,15 +114,14 @@ export function openAddModal(item) {
     switchTab('manual-tab', 'add');
     buildManualForm();
     populateManualForm(item);
-
-    // Update cover tab UI based on this item's type
-    _updateCoverTabUI();
+    _updateCoverTabUI();   // ← ensure tab label reflects correct type
 
     const titleEl = document.getElementById('add-modal-title');
     const saveBtn = document.getElementById('add-save-btn');
     if (titleEl) titleEl.textContent = 'Edit item';
     if (saveBtn) saveBtn.textContent = 'Save changes';
   } else {
+    // ── New item ──────────────────────────────────────────────
     _state.selectedType = null;
     _state.editingItem  = {};
     _state.lookupResult = null;
@@ -142,18 +140,18 @@ export function openAddModal(item) {
   import('./scanner.js').then(s => s.stopCamera()).catch(() => {});
   openModal('modal-add');
 }
-
 window.openAddModal = openAddModal;
 
 export function selectType(id) {
   _state.selectedType = MEDIA_TYPES.find(m => m.id === id);
+  if (!_state.editingItem) _state.editingItem = {};
+
   document.getElementById('add-step-1').style.display = 'none';
   document.getElementById('add-step-2').style.display = '';
   document.getElementById('add-footer').style.display = 'flex';
-  
-  // Update cover tab UI based on media type
+
+  // ← CRITICAL: update cover tab before switchTab so the tab is visible
   _updateCoverTabUI();
-  
   switchTab('scan-tab', 'add');
   buildManualForm();
 }
@@ -167,93 +165,181 @@ export function backToStep1() {
 }
 window.backToStep1 = backToStep1;
 
-// ── openTrade (called from detail modal) ──────────────────────
 export function openTrade() {
   closeModal('modal-detail');
   openModal('modal-trade');
 }
 window.openTrade = openTrade;
 
-// ─ Update cover tab UI based on selected media type ─
+// ─────────────────────────────────────────────────────────────
+// _updateCoverTabUI()
+//
+// Updates the "Cover/Scan" tab button label AND the drop-zone
+// text, icon, and info-banner for the currently selected media
+// type.  Also shows/hides the tab if coverScan is false.
+// ─────────────────────────────────────────────────────────────
 function _updateCoverTabUI() {
   const mt = _state.selectedType;
-  // If no media type selected, hide the cover tab entirely
+
+  // Resolve the tab button (inside #add-step-2)
+  const tabsContainer = document.querySelector('#add-step-2 .tabs[data-scope="add"]');
+  const coverBtn      = tabsContainer?.querySelector('.tab-btn[data-tab="cover-tab"]');
+  const coverPanel    = document.getElementById('tab-cover-tab');
+
   if (!mt) {
-    const tabsContainer = document.querySelector('#add-step-2 .tabs[data-scope="add"]');
-    if (tabsContainer) {
-      const coverBtn = tabsContainer.querySelector('.tab-btn[data-tab="cover-tab"]');
-      if (coverBtn) coverBtn.style.display = 'none';
-    }
-    const coverPanel = document.getElementById('tab-cover-tab');
+    if (coverBtn)  coverBtn.style.display  = 'none';
     if (coverPanel) coverPanel.style.display = 'none';
     return;
   }
-  
-  const coverDropText = document.getElementById('cover-drop-text');
-  const coverIcon = document.getElementById('cover-scanner-icon');
-  const coverInfoText = document.getElementById('cover-info-text');
-  
-  let scanText = 'Click or drag a photo of the cover';
-  let infoText = 'we\'ll try OCR to extract the title and search for it';
-  
-  if (mt.id === 'vinyl') {
-    scanText = 'Click or drag a photo of the vinyl cover';
-    infoText = 'we\'ll try OCR to extract the artist/album and search for it';
-    if (coverIcon) coverIcon.textContent = '🎵';
-  } else if (mt.id === 'cd' || mt.id === 'cassette') {
-    scanText = `Click or drag a photo of the ${mt.id === 'cd' ? 'CD' : 'cassette'} cover`;
-    infoText = 'we\'ll try OCR to extract the artist/album and search for it';
-    if (coverIcon) coverIcon.textContent = mt.id === 'cd' ? '💿' : '📼';
-  } else if (mt.id === 'dvd' || mt.id === 'vhs') {
-    scanText = `Click or drag a photo of the ${mt.id === 'dvd' ? 'DVD' : 'VHS'} cover`;
-    infoText = 'we\'ll try OCR to extract the title and search for it';
-    if (coverIcon) coverIcon.textContent = mt.id === 'dvd' ? '📀' : '📹';
-  } else if (mt.id === 'game') {
-    scanText = 'Click or drag a photo of the game cover';
-    infoText = 'we\'ll try OCR to extract the title and search for it';
-    if (coverIcon) coverIcon.textContent = '🎮';
-  } else if (mt.id === 'comic' || mt.id === 'manga') {
-    scanText = `Click or drag a photo of the ${mt.id === 'comic' ? 'comic' : 'manga'} cover`;
-    infoText = 'we\'ll try OCR to extract the title and search for it';
-    if (coverIcon) coverIcon.textContent = mt.id === 'comic' ? '🦸' : '📘';
-  } else if (mt.id === 'magazine' || mt.id === 'newspaper') {
-    scanText = `Click or drag a photo of the ${mt.label}`;
-    infoText = 'we\'ll try OCR to extract the title and search for it';
-    if (coverIcon) coverIcon.textContent = mt.id === 'magazine' ? '📖' : '📰';
-  } else if (mt.id === 'photo') {
-    scanText = 'Click or drag a photo';
-    infoText = 'we\'ll try OCR to extract metadata or search by subject';
-    if (coverIcon) coverIcon.textContent = '🖼';
-  } else {
-    scanText = `Click or drag a photo of the ${mt.label.toLowerCase()} cover`;
-    infoText = 'we\'ll try OCR to extract the title and search for it';
-    if (coverIcon) coverIcon.textContent = mt.icon;
-  }
-  
-  if (coverDropText) coverDropText.textContent = scanText;
-  if (coverInfoText) coverInfoText.innerHTML = `<strong>Cover scan:</strong> Upload a photo — ${infoText}. Or type the title/artist/name below.`;
 
-  // Show or hide the cover tab depending on media type support
-  const tabsContainer = document.querySelector('#add-step-2 .tabs[data-scope="add"]');
-  if (tabsContainer) {
-    const coverBtn = tabsContainer.querySelector('.tab-btn[data-tab="cover-tab"]');
-    if (coverBtn) coverBtn.style.display = (mt.coverScan ? '' : 'none');
-  }
-  const coverPanel = document.getElementById('tab-cover-tab');
-  if (coverPanel) coverPanel.style.display = (mt.coverScan ? '' : 'none');
+  // Show/hide based on whether this type supports cover scanning
+  const hasCoverScan = mt.coverScan !== false;
+  if (coverBtn)  coverBtn.style.display  = hasCoverScan ? '' : 'none';
+  if (coverPanel) coverPanel.style.display = hasCoverScan ? '' : 'none';
+
+  if (!hasCoverScan) return;
+
+  // ── Per-type labels ───────────────────────────────────────
+  //  coverBtnLabel  : text shown on the tab button
+  //  dropText       : heading inside the drop zone
+  //  infoDetail     : what OCR/search does for this type
+  //  icon           : emoji shown in the drop zone
+  //  placeholder    : search input placeholder
+  const cfg = _getCoverTabConfig(mt);
+
+  // Tab button label
+  if (coverBtn) coverBtn.textContent = cfg.coverBtnLabel;
+
+  // Drop-zone elements
+  const iconEl        = document.getElementById('cover-scanner-icon');
+  const dropTextEl    = document.getElementById('cover-drop-text');
+  const infoTextEl    = document.getElementById('cover-info-text');
+  const searchInput   = document.getElementById('cover-title-input');
+
+  if (iconEl)      iconEl.textContent      = cfg.icon;
+  if (dropTextEl)  dropTextEl.textContent  = cfg.dropText;
+  if (infoTextEl)  infoTextEl.innerHTML    =
+    `<strong>${cfg.coverBtnLabel}:</strong> ${cfg.infoDetail}. Or type the ${cfg.searchLabel} below.`;
+  if (searchInput) searchInput.placeholder = cfg.placeholder;
+}
+
+/** Returns per-media-type config for the cover/search tab */
+function _getCoverTabConfig(mt) {
+  const defaults = {
+    coverBtnLabel : '📷 Cover Scan',
+    icon          : mt.icon,
+    dropText      : `Click or drag a photo of the ${mt.label.toLowerCase()} cover`,
+    infoDetail    : 'we\'ll try OCR to extract the title and search for it',
+    searchLabel   : 'title',
+    placeholder   : 'Or type title / name to search…',
+  };
+
+  const overrides = {
+    book: {
+      coverBtnLabel : '📚 Book Cover',
+      icon          : '📗',
+      dropText      : 'Click or drag a photo of the book cover',
+      infoDetail    : 'we\'ll try OCR to extract the title or author and search Open Library',
+      searchLabel   : 'title or author',
+      placeholder   : 'Or type title / author to search…',
+    },
+    comic: {
+      coverBtnLabel : '🦸 Comic Cover',
+      icon          : '🦸',
+      dropText      : 'Click or drag a photo of the comic cover',
+      infoDetail    : 'we\'ll try OCR to extract the title / issue and search for it',
+      searchLabel   : 'title or issue',
+      placeholder   : 'Or type title / issue to search…',
+    },
+    manga: {
+      coverBtnLabel : '📘 Manga Cover',
+      icon          : '📘',
+      dropText      : 'Click or drag a photo of the manga cover',
+      infoDetail    : 'we\'ll try OCR to extract the title and search for it',
+      searchLabel   : 'title or volume',
+      placeholder   : 'Or type title / volume to search…',
+    },
+    vinyl: {
+      coverBtnLabel : '🎵 Vinyl Cover',
+      icon          : '🎵',
+      dropText      : 'Click or drag a photo of the album cover',
+      infoDetail    : 'we\'ll try OCR to extract the artist / album and search for it',
+      searchLabel   : 'artist or album',
+      placeholder   : 'Or type artist / album to search…',
+    },
+    cd: {
+      coverBtnLabel : '💿 CD Cover',
+      icon          : '💿',
+      dropText      : 'Click or drag a photo of the CD cover',
+      infoDetail    : 'we\'ll try OCR to extract the artist / album and search for it',
+      searchLabel   : 'artist or album',
+      placeholder   : 'Or type artist / album to search…',
+    },
+    cassette: {
+      coverBtnLabel : '📼 Cassette Cover',
+      icon          : '📼',
+      dropText      : 'Click or drag a photo of the cassette cover',
+      infoDetail    : 'we\'ll try OCR to extract the artist / album and search for it',
+      searchLabel   : 'artist or album',
+      placeholder   : 'Or type artist / album to search…',
+    },
+    dvd: {
+      coverBtnLabel : '📀 DVD Cover',
+      icon          : '📀',
+      dropText      : 'Click or drag a photo of the DVD or Blu-ray cover',
+      infoDetail    : 'we\'ll try OCR to extract the title and search for it',
+      searchLabel   : 'title',
+      placeholder   : 'Or type movie / show title to search…',
+    },
+    vhs: {
+      coverBtnLabel : '📹 VHS Cover',
+      icon          : '📹',
+      dropText      : 'Click or drag a photo of the VHS cover',
+      infoDetail    : 'we\'ll try OCR to extract the title and search for it',
+      searchLabel   : 'title',
+      placeholder   : 'Or type movie / show title to search…',
+    },
+    game: {
+      coverBtnLabel : '🎮 Game Cover',
+      icon          : '🎮',
+      dropText      : 'Click or drag a photo of the game cover',
+      infoDetail    : 'we\'ll try OCR to extract the title and search for it',
+      searchLabel   : 'title or platform',
+      placeholder   : 'Or type game title / platform to search…',
+    },
+    magazine: {
+      coverBtnLabel : '📖 Magazine Cover',
+      icon          : '📖',
+      dropText      : 'Click or drag a photo of the magazine cover',
+      infoDetail    : 'we\'ll try OCR to extract the title / issue and search for it',
+      searchLabel   : 'title or issue',
+      placeholder   : 'Or type magazine title to search…',
+    },
+    newspaper: {
+      coverBtnLabel : '📰 Newspaper Scan',
+      icon          : '📰',
+      dropText      : 'Click or drag a photo of the newspaper front page',
+      infoDetail    : 'we\'ll try OCR to extract the headline / date',
+      searchLabel   : 'title or headline',
+      placeholder   : 'Or type newspaper name / headline to search…',
+    },
+    photo: {
+      coverBtnLabel : '🖼 Photograph',
+      icon          : '🖼',
+      dropText      : 'Click or drag the photograph itself',
+      infoDetail    : 'we\'ll try OCR to extract any text metadata from the image',
+      searchLabel   : 'subject or photographer',
+      placeholder   : 'Or type subject / photographer to search…',
+    },
+  };
+
+  return { ...defaults, ...(overrides[mt.id] || {}) };
 }
 
 // ═══════════════════════════════════════════════════════════════
 // TABS
 // ═══════════════════════════════════════════════════════════════
 
-/**
- * switchTab(tabId, scope)
- * scope: 'add' | 'trade' | 'profile'
- *
- * Uses data-scope attributes on .tabs containers to avoid
- * cross-contaminating separate tab groups on the same page.
- */
 export function switchTab(tabId, scope) {
   let tabsContainer = null;
   if      (scope === 'add')     tabsContainer = document.querySelector('#add-step-2 .tabs[data-scope="add"]');
@@ -263,10 +349,8 @@ export function switchTab(tabId, scope) {
   if (tabsContainer) {
     tabsContainer.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     tabsContainer.querySelector(`.tab-btn[data-tab="${tabId}"]`)?.classList.add('active');
-    // Deactivate sibling panels within this scope's parent
     tabsContainer.parentElement.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
   }
-
   document.getElementById('tab-' + tabId)?.classList.add('active');
 }
 window.switchTab = switchTab;
@@ -308,7 +392,6 @@ export function buildMediaGrids() {
     ).join('');
   }
 
-  // Type-filter dropdowns
   ['col-filter-type', 'wish-type'].forEach(id => {
     const sel = document.getElementById(id);
     if (!sel) return;
@@ -342,8 +425,8 @@ async function renderDiscover() {
       const communityItems = await window._fb.getCommunityItems();
       if (communityItems.length) {
         grid.innerHTML = communityItems.map(i => {
-          const title = i.fields?.title || i.fields?.album || i.fields?.artist || 'Item';
-          const sub   = i.fields?.author || i.fields?.artist || i.fields?.writer || i.fields?.year || '';
+          const title    = i.fields?.title || i.fields?.album || i.fields?.artist || 'Item';
+          const sub      = i.fields?.author || i.fields?.artist || i.fields?.writer || i.fields?.year || '';
           const username = i.username ? `@${i.username}` : '@collector';
           return `<div class="col-item fade-in">
             <div class="col-thumb">${i.coverData ? `<img src="${i.coverData}" alt="${title}">` : (i.icon || '📦')}<div class="col-badge">${i.typeLabel}</div></div>
@@ -384,10 +467,7 @@ function renderTrade() {
   _renderConvoList();
 
   if (window._fb?.enabled && window._fb.subscribeToMessages && _state.user?.username) {
-    if (_tradeUnsubscribe) {
-      _tradeUnsubscribe();
-      _tradeUnsubscribe = null;
-    }
+    if (_tradeUnsubscribe) { _tradeUnsubscribe(); _tradeUnsubscribe = null; }
     _tradeUnsubscribe = window._fb.subscribeToMessages(_state.user.username, rawMessages => {
       const grouped = {};
       rawMessages.forEach(m => {
@@ -396,7 +476,9 @@ function renderTrade() {
         grouped[partner].msgs.push({
           from: m.from,
           text: m.text,
-          time: m.createdAt?.toDate ? m.createdAt.toDate().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) : new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }),
+          time: m.createdAt?.toDate
+            ? m.createdAt.toDate().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })
+            : new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }),
         });
       });
       _state.messages = Object.values(grouped).sort((a, b) => b.msgs.length - a.msgs.length);
@@ -404,63 +486,70 @@ function renderTrade() {
     });
   }
 
-  // Render traders: only actual registered users with items in their collection
-  const tradersGrid = document.getElementById('traders-grid');
-  if (tradersGrid) {
-    const traders = _getAvailableTraders();
-    if (traders.length === 0) {
-      tradersGrid.innerHTML = `<div style="grid-column: 1/-1; text-align:center; padding:40px; color:var(--text3)">
-        <div style="font-size:32px;margin-bottom:10px">👥</div>
-        <div>No other collectors available yet</div>
-        <div style="font-size:12px;margin-top:8px">As more users join, you'll see them here</div>
-      </div>`;
-    } else {
-      tradersGrid.innerHTML = traders.map(t => `
-        <div class="card"><div class="card-body flex items-center gap-3">
-          <div class="avatar" style="font-size:22px;width:48px;height:48px;display:flex;align-items:center;justify-content:center;background:var(--bg2);border-radius:50%">${t.icon}</div>
-          <div style="flex:1">
-            <div class="fw-500">${t.name}</div>
-            <div class="text-muted text-xs mono">@${t.username}</div>
-            <div class="text-xs" style="margin-top:4px">${t.items} item${t.items !== 1 ? 's' : ''}</div>
-          </div>
-          <button class="btn-ghost" style="font-size:12px" onclick="window.startMessage('${t.username}')">Message</button>
-        </div></div>`).join('');
-    }
-  }
-
+  _renderTradersGrid();
   renderWishlist();
 }
 
-// Helper: get available traders from current collection and Firebase if available
-function _getAvailableTraders() {
-  const traders = [];
-  
+/**
+ * _renderTradersGrid — fetch all users from Firebase and show them.
+ *
+ * FIX: The original getAllUsers() tried to read a 'collection' field
+ * from the users document, but in Firestore items live in a
+ * *subcollection* (users/{uid}/collection). We now use the corrected
+ * Firebase method (see firebase.js) and show a sensible empty state.
+ */
+async function _renderTradersGrid() {
+  const tradersGrid = document.getElementById('traders-grid');
+  if (!tradersGrid) return;
+
+  // Loading state
+  tradersGrid.innerHTML = `
+    <div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text3)">
+      <div class="spin" style="font-size:28px;display:inline-block;margin-bottom:10px">⏳</div>
+      <div>Loading collectors…</div>
+    </div>`;
+
+  let traders = [];
+
   if (window._fb?.enabled && window._fb.getAllUsers) {
-    // Firebase mode: get all users
     try {
-      const allUsers = window._fb.getAllUsers?.() || [];
-      allUsers.forEach(user => {
-        if (user.id === _state.user?.id) return; // Skip self
-        if (!user.collection || user.collection.length === 0) return; // Skip users with no items
-        
-        const firstItem = user.collection[0];
-        const icon = firstItem?.icon || '📦';
-        traders.push({
-          name: user.firstName + ' ' + user.lastName || user.username,
-          username: user.username,
-          items: user.collection.length,
-          icon: icon,
-        });
-      });
+      traders = await window._fb.getAllUsers();
+      // Remove self
+      traders = traders.filter(u => u.id !== _state.user?.id);
     } catch (e) {
       console.warn('Could not load traders from Firebase:', e);
     }
-  } else {
-    // Local mode: only show current user's collection info (no trading with self)
-    // In a real app, you'd fetch from a shared database
   }
-  
-  return traders.sort((a, b) => b.items - a.items);
+
+  if (traders.length === 0) {
+    tradersGrid.innerHTML = `
+      <div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text3)">
+        <div style="font-size:32px;margin-bottom:10px">👥</div>
+        <div style="font-weight:500;margin-bottom:6px">No other collectors found yet</div>
+        <div style="font-size:12px">
+          ${window._fb?.enabled
+            ? 'As more users sign up and add items, they\'ll appear here.'
+            : 'Enable Firebase to connect with other collectors across devices.'}
+        </div>
+      </div>`;
+    return;
+  }
+
+  tradersGrid.innerHTML = traders.map(t => {
+    const name  = t.firstName ? `${t.firstName} ${t.lastName || ''}`.trim() : t.username;
+    const items = t.itemCount ?? 0;
+    const icon  = t.icon || '📦';
+    return `
+      <div class="card"><div class="card-body flex items-center gap-3">
+        <div class="avatar" style="font-size:22px;width:48px;height:48px;display:flex;align-items:center;justify-content:center;background:var(--bg2);border-radius:50%">${icon}</div>
+        <div style="flex:1;min-width:0">
+          <div class="fw-500">${name}</div>
+          <div class="text-muted text-xs mono">@${t.username}</div>
+          <div class="text-xs" style="margin-top:4px">${items} item${items !== 1 ? 's' : ''}</div>
+        </div>
+        <button class="btn-ghost" style="font-size:12px" onclick="window.startMessage('${t.username}')">Message</button>
+      </div></div>`;
+  }).join('');
 }
 
 function _renderConvoList() {
@@ -511,7 +600,9 @@ window._sendChatMsg = async function(idx) {
     await window._fb.sendMessage(_state.messages[idx].to, text);
   } else if (window._fb?.enabled) {
     await window._fb.saveMessages(_state.messages);
-  } else saveState();
+  } else {
+    saveState();
+  }
   window._openConvo(idx);
   if (inp) inp.value = '';
 };
@@ -552,7 +643,7 @@ window.addWish = async function() {
   const text = document.getElementById('wish-input')?.value.trim();
   const type = document.getElementById('wish-type')?.value;
   if (!text) { toast('Enter an item', 'error'); return; }
-  _state.wishlist.push({ id: 'w' + Date.now(), text, type, date: new Date().toLocaleDateString() });
+  _state.wishlist.push({ id:'w'+Date.now(), text, type, date: new Date().toLocaleDateString() });
   const inputEl = document.getElementById('wish-input');
   if (inputEl) inputEl.value = '';
   if (window._fb?.enabled) await window._fb.saveWishlist(_state.wishlist);
@@ -591,14 +682,14 @@ export function renderProfile() {
   if (!_state.user) return;
   const u = _state.user;
 
-  const profAvatar  = document.getElementById('prof-avatar');
-  const profName    = document.getElementById('prof-name');
-  const profUser    = document.getElementById('prof-username');
-  const profMember  = document.getElementById('prof-member');
-  if (profAvatar) profAvatar.textContent  = (u.firstName || '?')[0].toUpperCase();
-  if (profName)   profName.textContent    = `${u.firstName} ${u.lastName}`;
-  if (profUser)   profUser.textContent    = `@${u.username}`;
-  if (profMember) profMember.textContent  = `Member since ${u.joined}`;
+  const profAvatar = document.getElementById('prof-avatar');
+  const profName   = document.getElementById('prof-name');
+  const profUser   = document.getElementById('prof-username');
+  const profMember = document.getElementById('prof-member');
+  if (profAvatar) profAvatar.textContent = (u.firstName || '?')[0].toUpperCase();
+  if (profName)   profName.textContent   = `${u.firstName} ${u.lastName}`;
+  if (profUser)   profUser.textContent   = `@${u.username}`;
+  if (profMember) profMember.textContent = `Member since ${u.joined}`;
 
   const types = new Set(_state.collection.map(i => i.type));
   document.getElementById('pstat-items').textContent  = _state.collection.length;
@@ -611,9 +702,9 @@ export function renderProfile() {
   const setBio   = document.getElementById('set-bio');
   const setPhone = document.getElementById('set-phone');
   if (setName)  setName.value  = `${u.firstName} ${u.lastName}`;
-  if (setEmail) setEmail.value = u.email || '';
-  if (setBio)   setBio.value   = u.bio || '';
-  if (setPhone) setPhone.value = u.phone || '';
+  if (setEmail) setEmail.value = u.email  || '';
+  if (setBio)   setBio.value   = u.bio    || '';
+  if (setPhone) setPhone.value = u.phone  || '';
 
   const profGrid = document.getElementById('prof-col-grid');
   if (profGrid) {
@@ -638,10 +729,10 @@ window.saveSettings = async function() {
   if (!_state.user) return;
 
   const parts = (nameEl?.value.trim() || '').split(' ');
-  _state.user.firstName = parts[0] || _state.user.firstName;
+  _state.user.firstName = parts[0]              || _state.user.firstName;
   _state.user.lastName  = parts.slice(1).join(' ') || _state.user.lastName;
   _state.user.email     = emailEl?.value.trim() || _state.user.email;
-  _state.user.bio       = bioEl?.value.trim() || _state.user.bio;
+  _state.user.bio       = bioEl?.value.trim()   || _state.user.bio;
   _state.user.phone     = phoneEl?.value.trim() || null;
 
   const avatarEl = document.getElementById('nav-avatar');
